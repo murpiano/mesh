@@ -15,9 +15,9 @@ class MeshDiscoveryTest {
         val found = CompletableDeferred<DiscoveredDevice>()
 
         val browser = MeshDiscovery(context)
-        browser.startBrowsing { device ->
+        browser.startBrowsing(onFound = { device ->
             if (device.uuid == "test-uuid-1" && !found.isCompleted) found.complete(device)
-        }
+        })
 
         val advertiser = MeshDiscovery(context)
         advertiser.advertise("test-uuid-1", "TestPhone", "android", 5555)
