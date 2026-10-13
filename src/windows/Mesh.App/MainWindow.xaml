@@ -5,11 +5,24 @@
     <Grid Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-        <TextBlock Grid.Row="0" Text="Discovered devices" FontWeight="Bold" Margin="0,0,0,8"/>
-        <ListBox Grid.Row="1" Name="DeviceListBox" DisplayMemberPath="Name"/>
-        <Button Grid.Row="2" Name="ConnectButton" Content="Connect" Margin="0,8,0,0" Click="ConnectButton_Click"/>
+        <Border Grid.Row="0" Name="MdnsErrorBanner" Visibility="Collapsed"
+                Background="#FFFDECEA" BorderBrush="#FFE57373" BorderThickness="1"
+                Padding="8" Margin="0,0,0,8">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Name="RefreshButton" Content="Refresh"
+                        Padding="10,2" Click="RefreshButton_Click"/>
+                <TextBlock Text="mDNS unreachable — check firewall settings"
+                           VerticalAlignment="Center" TextWrapping="Wrap"/>
+            </DockPanel>
+        </Border>
+        <TextBlock Grid.Row="1" Text="Discovered devices" FontWeight="Bold" Margin="0,0,0,8"/>
+        <ListBox Grid.Row="2" Name="DeviceListBox" DisplayMemberPath="Name"/>
+        <Button Grid.Row="3" Name="ConnectButton" Content="Connect" Margin="0,8,0,0" Click="ConnectButton_Click"/>
+        <TextBlock Grid.Row="4" Name="StatusText" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="Gray"/>
     </Grid>
 </Window>
