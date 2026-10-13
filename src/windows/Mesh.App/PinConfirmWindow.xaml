@@ -1,0 +1,13 @@
+<Window x:Class="Mesh.App.PinConfirmWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Confirm PIN" Height="180" Width="300" WindowStartupLocation="CenterScreen">
+    <StackPanel Margin="16">
+        <TextBlock Text="Does this PIN match the other device?" TextWrapping="Wrap" Margin="0,0,0,12"/>
+        <TextBlock Name="PinText" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,0,0,16"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+            <Button Name="MatchButton" Content="Match" Width="100" Margin="0,0,8,0" Click="MatchButton_Click"/>
+            <Button Name="NoMatchButton" Content="Not matching" Width="120" Click="NoMatchButton_Click"/>
+        </StackPanel>
+    </StackPanel>
+</Window>
