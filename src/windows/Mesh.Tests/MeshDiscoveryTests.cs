@@ -27,6 +27,54 @@ public class MeshDiscoveryTests
     }
 
     [Fact]
+    public async Task PeerAdvertisedBeforeBrowsingStarted_IsFoundByActiveQuery()
+    {
+        using var advertiser = new MeshDiscovery();
+        advertiser.Advertise("test-uuid-early", "EarlyPC", "windows", 5557);
+        // Let the unsolicited announcements go by before anyone is listening.
+        await Task.Delay(TimeSpan.FromSeconds(3));
+
+        var found = new TaskCompletionSource<DiscoveredDevice>();
+        using var browser = new MeshDiscovery();
+        browser.StartBrowsing(device =>
+        {
+            if (device.Uuid == "test-uuid-early") found.TrySetResult(device);
+        });
+
+        var device = await found.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("EarlyPC", device.Name);
+        Assert.Equal(5557, device.Port);
+    }
+
+    [Fact]
+    public async Task PeerShutdown_IsReportedAsLost()
+    {
+        var found = new TaskCompletionSource<bool>();
+        var lost = new TaskCompletionSource<string>();
+        using var browser = new MeshDiscovery();
+        browser.StartBrowsing(
+            device => { if (device.Uuid == "test-uuid-bye") found.TrySetResult(true); },
+            uuid => { if (uuid == "test-uuid-bye") lost.TrySetResult(uuid); });
+
+        var advertiser = new MeshDiscovery();
+        advertiser.Advertise("test-uuid-bye", "ByePC", "windows", 5558);
+        await found.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        advertiser.Dispose(); // sends goodbye
+        Assert.Equal("test-uuid-bye", await lost.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+
+    [Fact]
+    public void StartBrowsing_CanBeCalledAgainAsRefresh()
+    {
+        using var browser = new MeshDiscovery();
+        var errors = new List<Exception>();
+        browser.StartBrowsing(_ => { }, onError: errors.Add);
+        browser.StartBrowsing(_ => { }, onError: errors.Add);
+        Assert.Empty(errors);
+    }
+
+    [Fact]
     public void Advertise_DoesNotThrow_WhenCalledTwiceWithSamePort()
     {
         using var advertiser = new MeshDiscovery();
