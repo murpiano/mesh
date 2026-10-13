@@ -23,7 +23,7 @@ public class PairingSession
             (sender, cert, chain, errors) => true); // untrusted at handshake stage, per spec
 
         await sslStream.AuthenticateAsServerAsync(identity, clientCertificateRequired: true,
-            checkCertificateRevocation: false);
+            checkCertificateRevocation: false).WaitAsync(TimeSpan.FromSeconds(10));
 
         var peerCert = sslStream.RemoteCertificate as X509Certificate2
             ?? new X509Certificate2(sslStream.RemoteCertificate!);
@@ -48,7 +48,7 @@ public class PairingSession
             // SslStream constructor above already supplies one, and SslStream throws
             // InvalidOperationException ("already set in the SslStream constructor")
             // if AuthenticateAsClientAsync's options try to set it again.
-        });
+        }).WaitAsync(TimeSpan.FromSeconds(10));
 
         var peerCert = sslStream.RemoteCertificate as X509Certificate2
             ?? new X509Certificate2(sslStream.RemoteCertificate!);

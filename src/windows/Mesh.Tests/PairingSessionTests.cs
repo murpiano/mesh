@@ -1,5 +1,6 @@
 using Mesh.Core;
 using System.Net;
+using System.Net.Sockets;
 using Xunit;
 
 namespace Mesh.Tests;
@@ -33,6 +34,33 @@ public class PairingSessionTests
         {
             if (File.Exists(certAPath)) File.Delete(certAPath);
             if (File.Exists(certBPath)) File.Delete(certBPath);
+        }
+    }
+
+    [Fact]
+    public async Task StartListener_ThrowsAfterTimeout_WhenPeerNeverCompletesTlsHandshake()
+    {
+        var certPath = Path.Combine(Path.GetTempPath(), $"mesh-test-stall-{Guid.NewGuid()}.pfx");
+        try
+        {
+            var cert = IdentityStore.LoadOrCreate(certPath);
+            const int port = 51236;
+            var server = new PairingSession();
+            var listenTask = server.StartListener(cert, port);
+
+            await Task.Delay(200); // let the listener bind
+
+            // Connect at the raw TCP level but never send a TLS ClientHello, so the
+            // server's AuthenticateAsServerAsync stalls indefinitely unless it is
+            // itself bounded by a timeout.
+            using var rawClient = new TcpClient();
+            await rawClient.ConnectAsync(IPAddress.Loopback, port);
+
+            await Assert.ThrowsAsync<TimeoutException>(() => listenTask);
+        }
+        finally
+        {
+            if (File.Exists(certPath)) File.Delete(certPath);
         }
     }
 
