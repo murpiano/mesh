@@ -93,6 +93,14 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
     // keeps received clips in order and lets a load see exactly the writes queued before it.
     private val historyOps = Channel<HistoryOp>(Channel.UNLIMITED)
 
+    /** A local clip to push, bound to the session (and peer) that was current when it was copied. */
+    private class OutgoingPush(val session: MeshSession, val peerUuid: String?, val message: ClipboardPush)
+
+    // Network sends live on their own single consumer, decoupled from [historyOps]: a send that
+    // blocks on the socket (half-open connection, full send buffer) must never stall history
+    // persistence or the Clipboard tab. Single consumer keeps pushes going out in copy order.
+    private val outgoingPushes = Channel<OutgoingPush>(Channel.UNLIMITED)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -102,6 +110,7 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
         clipboardWatcher.onTextCopied = ::onLocalTextCopied
         clipboardWatcher.start()
         lifecycleScope.launch { runHistoryConsumer() }
+        lifecycleScope.launch { runPushSender() }
 
         val tabLayout = findViewById<TabLayout>(R.id.tabLayout)
         if (savedInstanceState == null) {
@@ -155,6 +164,7 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
         listener?.close() // unblocks accept(); the loop exits
         discovery.stop()
         historyOps.close()
+        outgoingPushes.close()
         meshSession?.let(::closeInBackground)
         meshSession = null
     }
@@ -594,13 +604,34 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
                     }
                     clipboardFragment()?.onHistoryEntryAdded(op.entry)
                     if (op.pushToPeer) {
-                        // While disconnected this queues inside the session and is drained and
-                        // re-sent by attachMeshSession on reconnect. send() does socket I/O.
+                        // Hand off to runPushSender: persistence above never waits on the network.
                         val session = meshSession ?: continue
-                        withContext(Dispatchers.IO) { session.send(ClipboardPush(op.entry.timestamp, op.entry.text)) }
+                        outgoingPushes.trySend(
+                            OutgoingPush(session, meshPeerUuid, ClipboardPush(op.entry.timestamp, op.entry.text)))
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Sends queued local clips to the peer, one at a time in copy order. Runs on Main between
+     * sends so it can read [meshSession] consistently; the send itself (socket I/O) runs on IO.
+     * While disconnected, send() queues inside the session and attachMeshSession drains and
+     * re-sends it on reconnect.
+     */
+    private suspend fun runPushSender() {
+        for (push in outgoingPushes) {
+            // If the session this clip was bound to has since been replaced by a reconnect to
+            // the same peer, use the replacement (the old one is closed and already drained).
+            // Never redirect to a different peer — same rule as attachMeshSession.
+            val current = meshSession
+            val session = when {
+                current == null || current === push.session -> push.session
+                meshPeerUuid == push.peerUuid -> current
+                else -> continue
+            }
+            withContext(Dispatchers.IO) { session.send(push.message) }
         }
     }
 

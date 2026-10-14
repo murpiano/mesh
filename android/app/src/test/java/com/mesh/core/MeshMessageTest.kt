@@ -1,12 +1,14 @@
 package com.mesh.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.IOException
 
 class MeshMessageTest {
     @Test
@@ -62,5 +64,35 @@ class MeshMessageTest {
         assertEquals(0, bytes[3].toInt()); assertEquals(0, bytes[4].toInt())
         assertEquals(0, bytes[5].toInt()); assertEquals(0, bytes[6].toInt())
         assertEquals(0, bytes[7].toInt()); assertEquals(1, bytes[8].toInt())
+    }
+
+    @Test
+    fun `clipboard push larger than pairing string cap round trips`() {
+        // Regression: the text field used to go through PairingProtocol.writeString, which caps
+        // strings at 1024 bytes, so any real-sized clip threw on write and wedged the session.
+        val text = "clipboard-".repeat(500) + "\u00e9\u4e2d\uD83D\uDE00"
+        assertTrue(text.toByteArray(Charsets.UTF_8).size > PairingProtocol.MAX_STRING_BYTES)
+        val out = ByteArrayOutputStream()
+        MeshMessage.write(DataOutputStream(out), ClipboardPush(42L, text))
+
+        val input = ByteArrayInputStream(out.toByteArray())
+        val received = MeshMessage.read(DataInputStream(input)) as ClipboardPush
+
+        assertEquals(42L, received.timestamp)
+        assertEquals(text, received.text)
+        assertEquals(0, input.available())
+    }
+
+    @Test
+    fun `clipboard push length prefix above cap is rejected`() {
+        val out = ByteArrayOutputStream()
+        val dos = DataOutputStream(out)
+        dos.writeByte(0x01)
+        dos.writeLong(0L)
+        dos.writeInt(MeshMessage.MAX_TEXT_BYTES + 1)
+
+        assertThrows(IOException::class.java) {
+            MeshMessage.read(DataInputStream(ByteArrayInputStream(out.toByteArray())))
+        }
     }
 }
