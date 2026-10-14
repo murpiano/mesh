@@ -66,6 +66,13 @@ interface PairingPrompt {
 /** Thrown when the peer's revealed nonce does not match its earlier commitment. */
 class PairingFailedException(message: String) : Exception(message)
 
+/** The open, authenticated transport handed off by [PairingSession.detachTransport]. */
+data class SessionTransport(
+    val socket: SSLSocket,
+    val input: DataInputStream,
+    val output: DataOutputStream
+)
+
 /**
  * One open TLS connection to a peer plus the post-handshake pairing protocol
  * ([PairingProtocol]). The socket stays open after the handshake so the protocol can run over
@@ -339,6 +346,16 @@ class PairingSession private constructor(
     private fun outcome(result: PairingResult, detail: String) = PairingOutcome(result, peerUuid, peerName, detail)
 
     private val closed = AtomicBoolean(false)
+
+    /**
+     * Hands ownership of the open, authenticated transport to the caller (e.g. to build a
+     * [MeshSession] on a Paired/Reconnected outcome). After this call, this session's own
+     * [close] becomes a no-op — the caller now owns closing the transport.
+     */
+    fun detachTransport(): SessionTransport {
+        closed.set(true)
+        return SessionTransport(socket, input, output)
+    }
 
     /**
      * Idempotent, non-blocking close, safe to call from Main (e.g. via `use {}`).

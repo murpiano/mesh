@@ -342,4 +342,19 @@ class PairingSessionLoopbackTest {
         assertEquals(PeerTrust.CERTIFICATE_CHANGED, PairingSession.checkTrust(dao, "known-uuid", "new-fingerprint"))
         assertEquals(PeerTrust.UNKNOWN, PairingSession.checkTrust(dao, "other-uuid", "old-fingerprint"))
     }
+
+    @Test
+    fun detachTransport_makesCloseNoOp_andLeavesSocketUsable() = runBlocking {
+        val (server, client) = connectPair(idA, idB)
+        try {
+            val transport = server.detachTransport()
+            server.close() // must now be a no-op
+
+            assertFalse(transport.socket.isClosed)
+
+            transport.socket.close()
+        } finally {
+            client.close()
+        }
+    }
 }
