@@ -16,7 +16,9 @@ public enum MeshSessionState { Connected, Disconnected, Reconnecting }
 /// this class does not hold). Task 5 wires the UI layer to listen for
 /// <see cref="StateChanged"/> == Disconnected, re-run <c>PairingSession.ConnectAsync</c> +
 /// <c>IsPeerTrusted</c> + <c>DetachTransport</c> on success, and construct a fresh
-/// <see cref="MeshSession"/> via <see cref="FromTransport"/> to replace this one.
+/// <see cref="MeshSession"/> via <see cref="FromTransport"/> to replace this one. Messages queued
+/// here while disconnected are carried over by calling <see cref="DrainPendingSendsAsync"/> on this
+/// (disposed) session and re-sending them through the replacement.
 /// </summary>
 public sealed class MeshSession : IDisposable
 {
@@ -85,6 +87,36 @@ public sealed class MeshSession : IDisposable
                 TransitionTo(MeshSessionState.Disconnected);
                 StartReconnectLoop();
             }
+        }
+        finally
+        {
+            _sendLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Empties the queue of messages that <see cref="SendAsync"/> accepted while this session was
+    /// not connected (or whose write failed) and returns them in their original order, so a
+    /// caller replacing this session with a fresh one (see the class remarks on reconnect) can
+    /// re-send them over the new transport instead of losing them. Heartbeats are dropped: they
+    /// are only meaningful on the transport they were generated for. Waits for any in-flight
+    /// <see cref="SendAsync"/> to finish first, so call it after <see cref="Dispose"/> to make
+    /// sure nothing else is enqueued afterwards. Asynchronous on purpose: a <see cref="SendAsync"/>
+    /// started on a UI thread resumes on that thread while holding the send lock, so a blocking
+    /// wait here from the same thread could deadlock.
+    /// </summary>
+    public async Task<IReadOnlyList<MeshMessage>> DrainPendingSendsAsync()
+    {
+        await _sendLock.WaitAsync();
+        try
+        {
+            var drained = new List<MeshMessage>(_pendingSend.Count);
+            while (_pendingSend.Count > 0)
+            {
+                var message = _pendingSend.Dequeue();
+                if (message is not HeartbeatMessage) drained.Add(message);
+            }
+            return drained;
         }
         finally
         {

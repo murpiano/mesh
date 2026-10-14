@@ -1,28 +1,55 @@
 <Window x:Class="Mesh.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Mesh" Height="450" Width="400">
-    <Grid Margin="12">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-        <Border Grid.Row="0" Name="MdnsErrorBanner" Visibility="Collapsed"
-                Background="#FFFDECEA" BorderBrush="#FFE57373" BorderThickness="1"
-                Padding="8" Margin="0,0,0,8">
-            <DockPanel>
-                <Button DockPanel.Dock="Right" Name="RefreshButton" Content="Refresh"
-                        Padding="10,2" Click="RefreshButton_Click"/>
-                <TextBlock Text="mDNS unreachable — check firewall settings"
-                           VerticalAlignment="Center" TextWrapping="Wrap"/>
-            </DockPanel>
-        </Border>
-        <TextBlock Grid.Row="1" Text="Discovered devices" FontWeight="Bold" Margin="0,0,0,8"/>
-        <ListBox Grid.Row="2" Name="DeviceListBox" DisplayMemberPath="Name"/>
-        <Button Grid.Row="3" Name="ConnectButton" Content="Connect" Margin="0,8,0,0" Click="ConnectButton_Click"/>
-        <TextBlock Grid.Row="4" Name="StatusText" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="Gray"/>
-    </Grid>
+        Title="Mesh" Height="500" Width="420">
+    <TabControl>
+        <TabItem Header="Devices">
+            <Grid Margin="12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Border Grid.Row="0" Name="MdnsErrorBanner" Visibility="Collapsed"
+                        Background="#FFFDECEA" BorderBrush="#FFE57373" BorderThickness="1"
+                        Padding="8" Margin="0,0,0,8">
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" Name="RefreshButton" Content="Refresh"
+                                Padding="10,2" Click="RefreshButton_Click"/>
+                        <TextBlock Text="mDNS unreachable — check firewall settings"
+                                   VerticalAlignment="Center" TextWrapping="Wrap"/>
+                    </DockPanel>
+                </Border>
+                <TextBlock Grid.Row="1" Text="Discovered devices" FontWeight="Bold" Margin="0,0,0,8"/>
+                <ListBox Grid.Row="2" Name="DeviceListBox" DisplayMemberPath="Name"/>
+                <Button Grid.Row="3" Name="ConnectButton" Content="Connect" Margin="0,8,0,0" Click="ConnectButton_Click"/>
+                <TextBlock Grid.Row="4" Name="StatusText" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="Gray"/>
+            </Grid>
+        </TabItem>
+        <TabItem Header="Clipboard">
+            <Grid Margin="12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TextBlock Grid.Row="0" Name="SessionStatusText" Text="Not connected" Margin="0,0,0,8"/>
+                <ListBox Grid.Row="1" Name="ClipboardHistoryListBox">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <Button Content="Copy" Width="60" VerticalAlignment="Top"
+                                        Click="CopyHistoryEntry_Click" Tag="{Binding}"/>
+                                <StackPanel Margin="8,0,0,0">
+                                    <TextBlock Text="{Binding Source}" FontWeight="Bold" FontSize="11"/>
+                                    <TextBlock Text="{Binding Text}" TextWrapping="Wrap" MaxWidth="300"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Grid>
+        </TabItem>
+    </TabControl>
 </Window>

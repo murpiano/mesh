@@ -61,4 +61,52 @@ public class MeshSessionTests
         }
         finally { client.Dispose(); }
     }
+
+    [Fact]
+    public async Task DrainPendingSendsAsync_MessagesQueuedWhileDisconnected_ArriveOverReplacementSession()
+    {
+        var (oldServer, oldClient) = await CreatePairAsync(51893);
+        MeshSession? newServer = null, newClient = null;
+        try
+        {
+            var disconnected = new TaskCompletionSource();
+            oldClient.StateChanged += s =>
+            {
+                if (s != MeshSessionState.Connected) disconnected.TrySetResult();
+            };
+            oldServer.Dispose(); // peer goes away
+            await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            // Sent during the disconnect window: must be queued, not written or dropped.
+            await oldClient.SendAsync(new ClipboardPushMessage(DateTimeOffset.UtcNow, "first"));
+            await oldClient.SendAsync(new ClipboardPushMessage(DateTimeOffset.UtcNow, "second"));
+
+            // Replace the dead session the way the UI layer does: dispose, drain, re-send.
+            oldClient.Dispose();
+            var pending = await oldClient.DrainPendingSendsAsync();
+            Assert.Equal(new[] { "first", "second" },
+                pending.Cast<ClipboardPushMessage>().Select(m => m.Text));
+            Assert.Empty(await oldClient.DrainPendingSendsAsync()); // queue really was emptied
+
+            (newServer, newClient) = await CreatePairAsync(51894);
+            var received = new ConcurrentQueue<string>();
+            var gotBoth = new TaskCompletionSource();
+            newServer.MessageReceived += msg =>
+            {
+                if (msg is ClipboardPushMessage push) received.Enqueue(push.Text);
+                if (received.Count == 2) gotBoth.TrySetResult();
+            };
+
+            foreach (var message in pending) await newClient.SendAsync(message);
+
+            await gotBoth.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(new[] { "first", "second" }, received.ToArray());
+        }
+        finally
+        {
+            oldClient.Dispose();
+            newServer?.Dispose();
+            newClient?.Dispose();
+        }
+    }
 }
