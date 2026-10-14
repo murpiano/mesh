@@ -441,4 +441,53 @@ public class PairingSessionTests(TwoIdentitiesFixture ids) : IClassFixture<TwoId
         await Assert.ThrowsAnyAsync<Exception>(() =>
             PairingSession.ConnectAsync(ids.CertB, "127.0.0.1", port));
     }
+
+    [Fact]
+    public async Task DetachTransport_MakesDisposeANoOp_AndLeavesStreamUsable()
+    {
+        var certAPath = Path.Combine(Path.GetTempPath(), $"mesh-test-a-{Guid.NewGuid()}.pfx");
+        var certBPath = Path.Combine(Path.GetTempPath(), $"mesh-test-b-{Guid.NewGuid()}.pfx");
+        try
+        {
+            var certA = IdentityStore.LoadOrCreate(certAPath);
+            var certB = IdentityStore.LoadOrCreate(certBPath);
+
+            var listener = new PairingListener();
+            var acceptTask = listener.AcceptAsync(certA);
+            var client = await PairingSession.ConnectAsync(certB, "127.0.0.1", listener.Port);
+            var server = await acceptTask;
+
+            var (detachedClient, detachedStream) = server.DetachTransport();
+            server.Dispose(); // must be a no-op now
+
+            var (clientTcp, clientStream) = client.DetachTransport();
+
+            // The detached stream must still work: write from the client side, read via the
+            // server's detached stream.
+            var writeBuf = System.Text.Encoding.UTF8.GetBytes("hello");
+            await clientStream.WriteAsync(writeBuf);
+            await clientStream.FlushAsync();
+
+            var readBuf = new byte[5];
+            var totalRead = 0;
+            while (totalRead < 5)
+            {
+                var n = await detachedStream.ReadAsync(readBuf, totalRead, 5 - totalRead);
+                Assert.True(n > 0);
+                totalRead += n;
+            }
+            Assert.Equal("hello", System.Text.Encoding.UTF8.GetString(readBuf));
+
+            detachedStream.Dispose();
+            detachedClient.Dispose();
+            clientStream.Dispose();
+            clientTcp.Dispose();
+            listener.Dispose();
+        }
+        finally
+        {
+            if (File.Exists(certAPath)) File.Delete(certAPath);
+            if (File.Exists(certBPath)) File.Delete(certBPath);
+        }
+    }
 }

@@ -65,6 +65,7 @@ public sealed class PairingSession : IDisposable
     private readonly X509Certificate2 _localIdentity;
     private byte[]? _localNonce;
     private byte[]? _peerNonce;
+    private bool _detached;
 
     public string PeerFingerprint { get; }
     public string PeerIp { get; }
@@ -307,8 +308,21 @@ public sealed class PairingSession : IDisposable
 
     private static Task WithNetworkTimeout(Func<Task> step) => step().WaitAsync(NetworkTimeout);
 
+    /// <summary>
+    /// Hands ownership of the open, authenticated transport to the caller (e.g. to build a
+    /// <see cref="MeshSession"/> on a Paired/Reconnected outcome). After this call, this
+    /// session's own <see cref="Dispose"/> becomes a no-op — the caller now owns closing
+    /// the transport.
+    /// </summary>
+    public (TcpClient Client, SslStream Stream) DetachTransport()
+    {
+        _detached = true;
+        return (_client, _stream);
+    }
+
     public void Dispose()
     {
+        if (_detached) return;
         _stream.Dispose();
         _client.Dispose();
     }
