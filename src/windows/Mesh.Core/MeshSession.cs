@@ -40,8 +40,13 @@ public sealed class MeshSession : IDisposable
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly Queue<MeshMessage> _pendingSend = new();
     private DateTimeOffset _lastReceivedAt = DateTimeOffset.UtcNow;
-    private MeshSessionState _state = MeshSessionState.Connected;
+    // Backing store for the session state, accessed only via Volatile.Read / Interlocked.Exchange
+    // (see State / TransitionTo) so concurrent transitions from the read/heartbeat/reconnect loops
+    // and SendAsync never race on the field itself and never double-fire StateChanged.
+    private int _stateValue = (int)MeshSessionState.Connected;
     private int _reconnecting; // 0/1 guard so we don't start multiple reconnect loops concurrently
+
+    private MeshSessionState State => (MeshSessionState)Volatile.Read(ref _stateValue);
 
     private MeshSession(TcpClient client, SslStream stream, string peerUuid, string peerIp, int peerPort)
     {
@@ -65,7 +70,7 @@ public sealed class MeshSession : IDisposable
         await _sendLock.WaitAsync();
         try
         {
-            if (_state != MeshSessionState.Connected || _stream == null)
+            if (State != MeshSessionState.Connected || _stream == null)
             {
                 _pendingSend.Enqueue(message);
                 return;
@@ -94,7 +99,7 @@ public sealed class MeshSession : IDisposable
             try
             {
                 var stream = _stream;
-                if (stream == null || _state != MeshSessionState.Connected)
+                if (stream == null || State != MeshSessionState.Connected)
                 {
                     await Task.Delay(200, ct);
                     continue;
@@ -127,7 +132,7 @@ public sealed class MeshSession : IDisposable
             try { await Task.Delay(HeartbeatInterval, ct); }
             catch (OperationCanceledException) { return; }
 
-            if (_state == MeshSessionState.Connected)
+            if (State == MeshSessionState.Connected)
             {
                 if (DateTimeOffset.UtcNow - _lastReceivedAt > IdleTimeout)
                 {
@@ -204,9 +209,16 @@ public sealed class MeshSession : IDisposable
 
     private void TransitionTo(MeshSessionState state)
     {
-        if (_state == state) return;
-        _state = state;
-        StateChanged?.Invoke(state);
+        // Atomically swap in the new state and capture whatever was there before. Exchange is a
+        // single indivisible read-modify-write, so when two loops race to transition at the same
+        // time, exactly one of them observes previous != state and fires StateChanged; the other
+        // sees the state already matches what it was about to set and does nothing. This closes
+        // the duplicate-event race without a lock around the whole class.
+        var previous = (MeshSessionState)Interlocked.Exchange(ref _stateValue, (int)state);
+        if (previous != state)
+        {
+            StateChanged?.Invoke(state);
+        }
     }
 
     public void Dispose()
