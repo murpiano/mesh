@@ -48,7 +48,9 @@ public sealed class MeshSession : IDisposable
     private int _stateValue = (int)MeshSessionState.Connected;
     private int _reconnecting; // 0/1 guard so we don't start multiple reconnect loops concurrently
 
-    private MeshSessionState State => (MeshSessionState)Volatile.Read(ref _stateValue);
+    /// <summary>Current connection state. Anything other than Connected means this session is dead
+    /// for sending purposes until the owner replaces it (see the class remarks on reconnect).</summary>
+    public MeshSessionState State => (MeshSessionState)Volatile.Read(ref _stateValue);
 
     private MeshSession(TcpClient client, SslStream stream, string peerUuid, string peerIp, int peerPort)
     {
@@ -59,9 +61,19 @@ public sealed class MeshSession : IDisposable
         _peerPort = peerPort;
     }
 
-    public static MeshSession FromTransport(TcpClient client, SslStream stream, string peerUuid, string peerIp, int peerPort)
+    /// <summary>
+    /// Takes ownership of an authenticated transport and starts the read/heartbeat loops.
+    /// Pass <paramref name="onMessageReceived"/>/<paramref name="onStateChanged"/> here rather than
+    /// subscribing to the events afterwards: they are attached before the loops start, so a message
+    /// the peer sent immediately (already buffered on the stream, whose first read can complete
+    /// synchronously inside this call) can never be raised with no subscriber and silently dropped.
+    /// </summary>
+    public static MeshSession FromTransport(TcpClient client, SslStream stream, string peerUuid, string peerIp,
+        int peerPort, Action<MeshMessage>? onMessageReceived = null, Action<MeshSessionState>? onStateChanged = null)
     {
         var session = new MeshSession(client, stream, peerUuid, peerIp, peerPort);
+        if (onMessageReceived != null) session.MessageReceived += onMessageReceived;
+        if (onStateChanged != null) session.StateChanged += onStateChanged;
         _ = session.RunReadLoopAsync(session._lifetimeCts.Token);
         _ = session.RunHeartbeatLoopAsync(session._lifetimeCts.Token);
         return session;

@@ -8,6 +8,15 @@ public class MeshSessionTests
 {
     private static async Task<(MeshSession ServerSession, MeshSession ClientSession)> CreatePairAsync(int port)
     {
+        var (server, client) = await CreateTransportsAsync(port);
+        return (
+            MeshSession.FromTransport(server.Client, server.Stream, "peer-uuid-client", "127.0.0.1", port),
+            MeshSession.FromTransport(client.Client, client.Stream, "peer-uuid-server", "127.0.0.1", port));
+    }
+
+    private static async Task<((System.Net.Sockets.TcpClient Client, System.Net.Security.SslStream Stream) Server,
+        (System.Net.Sockets.TcpClient Client, System.Net.Security.SslStream Stream) Client)> CreateTransportsAsync(int port)
+    {
         var certAPath = Path.Combine(Path.GetTempPath(), $"mesh-test-a-{Guid.NewGuid()}.pfx");
         var certBPath = Path.Combine(Path.GetTempPath(), $"mesh-test-b-{Guid.NewGuid()}.pfx");
         var certA = IdentityStore.LoadOrCreate(certAPath);
@@ -19,12 +28,65 @@ public class MeshSessionTests
         var serverSession = await acceptTask;
         listener.Dispose();
 
-        var (serverClient, serverStream) = serverSession.DetachTransport();
-        var (clientTcp, clientStream) = clientSession.DetachTransport();
+        return (serverSession.DetachTransport(), clientSession.DetachTransport());
+    }
 
-        var server = MeshSession.FromTransport(serverClient, serverStream, "peer-uuid-client", "127.0.0.1", port);
-        var client = MeshSession.FromTransport(clientTcp, clientStream, "peer-uuid-server", "127.0.0.1", port);
-        return (server, client);
+    [Fact]
+    public async Task FromTransport_HandlersPassedIn_ReceiveMessagesAlreadyBufferedBeforeConstruction()
+    {
+        // The peer writes immediately after reconnecting, before our side has even built its
+        // MeshSession: the frames are already sitting in the stream, so the very first read
+        // completes straight away. With the handler passed into FromTransport there is no
+        // "subscribe after construction" window in which those frames could be dropped.
+        var (serverTransport, clientTransport) = await CreateTransportsAsync(51895);
+        var server = MeshSession.FromTransport(serverTransport.Client, serverTransport.Stream,
+            "peer-uuid-client", "127.0.0.1", 51895);
+        MeshSession? client = null;
+        try
+        {
+            const int count = 20;
+            for (var i = 0; i < count; i++)
+                await server.SendAsync(new ClipboardPushMessage(DateTimeOffset.UtcNow, $"clip-{i}"));
+            await Task.Delay(300); // let the frames land in the client's receive buffer
+
+            var received = new ConcurrentQueue<string>();
+            var gotAll = new TaskCompletionSource();
+            client = MeshSession.FromTransport(clientTransport.Client, clientTransport.Stream,
+                "peer-uuid-server", "127.0.0.1", 51895,
+                onMessageReceived: msg =>
+                {
+                    if (msg is ClipboardPushMessage push) received.Enqueue(push.Text);
+                    if (received.Count == count) gotAll.TrySetResult();
+                });
+
+            await gotAll.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(Enumerable.Range(0, count).Select(i => $"clip-{i}"), received.ToArray());
+        }
+        finally
+        {
+            server.Dispose();
+            client?.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task FromTransport_StateHandlerPassedIn_ReceivesStateChanges()
+    {
+        var (serverTransport, clientTransport) = await CreateTransportsAsync(51896);
+        var states = new ConcurrentQueue<MeshSessionState>();
+        var server = MeshSession.FromTransport(serverTransport.Client, serverTransport.Stream,
+            "peer-uuid-client", "127.0.0.1", 51896);
+        var client = MeshSession.FromTransport(clientTransport.Client, clientTransport.Stream,
+            "peer-uuid-server", "127.0.0.1", 51896, onStateChanged: states.Enqueue);
+        try
+        {
+            Assert.Equal(MeshSessionState.Connected, client.State);
+            server.Dispose();
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            Assert.Contains(MeshSessionState.Disconnected, states);
+            Assert.NotEqual(MeshSessionState.Connected, client.State);
+        }
+        finally { client.Dispose(); }
     }
 
     [Fact]

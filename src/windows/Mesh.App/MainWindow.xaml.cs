@@ -30,6 +30,18 @@ public partial class MainWindow : Window, IPairingPrompt
         TimeSpan.FromSeconds(8), TimeSpan.FromSeconds(16), TimeSpan.FromSeconds(30)
     };
 
+    /// <summary>
+    /// Symmetry break for background reconnects: only the side whose device UUID sorts lower
+    /// (ordinal) dials out; the other side waits for that incoming connection on its accept loop.
+    /// The waiting side still dials as a liveness fallback, but only after this grace period and
+    /// then at <see cref="PassiveReconnectInterval"/>, so it never runs in lockstep with the dialer.
+    /// </summary>
+    private static readonly TimeSpan PassiveReconnectGrace = TimeSpan.FromSeconds(120);
+    /// <summary>Deliberately not a multiple of the dialer's 30 s cap, so the two schedules drift apart.</summary>
+    private static readonly TimeSpan PassiveReconnectInterval = TimeSpan.FromSeconds(45);
+
+    private enum ReconnectAttemptResult { Reconnected, Failed, TrustLost }
+
     private readonly MeshDiscovery _discovery = new();
     private readonly ObservableCollection<DiscoveredDevice> _devices = new();
     private readonly ObservableCollection<ClipboardEntry> _clipboardHistory = new();
@@ -50,7 +62,13 @@ public partial class MainWindow : Window, IPairingPrompt
     private string? _meshPeerUuid;
     private string? _meshPeerName;
     private (string Ip, int Port) _meshPeerEndpoint = ("", 0);
-    private bool _meshReconnectInFlight;
+    // The session the (single) running reconnect loop is currently trying to replace; null when no
+    // loop is running. Tracking the instance instead of a plain "in flight" flag lets a newer
+    // session's disconnect retarget a loop that was started for an older, since-replaced session.
+    private MeshSession? _meshReconnectTarget;
+    // A dead session whose peer no longer passes the trust check: retrying can never succeed, so
+    // it is left alone until the user re-pairs (which replaces it).
+    private MeshSession? _meshTrustLostSession;
 
     public MainWindow()
     {
@@ -137,7 +155,15 @@ public partial class MainWindow : Window, IPairingPrompt
         {
             var outcome = await session.RunAsync(_selfUuid, _selfName, _pairedDevicesPath, this);
             var peerName = outcome.PeerName ?? session.PeerIp;
-            ShowOutcome(outcome, peerName);
+            // A trusted reconnect from the peer we already have a mesh session with is the peer's
+            // background reconnect replacing that session: report it quietly, the same way our own
+            // background reconnect does, instead of popping a dialog on every network blip.
+            var isBackgroundReconnect = outcome.Result == PairingResult.Reconnected &&
+                _meshSession != null && _meshPeerUuid == outcome.PeerUuid;
+            if (isBackgroundReconnect)
+                StatusText.Text = $"Reconnected to {peerName} (trusted).";
+            else
+                ShowOutcome(outcome, peerName);
             if (outcome.Result is PairingResult.Paired or PairingResult.Reconnected)
             {
                 // The socket we accepted came from the peer's ephemeral port, so its listening
@@ -227,14 +253,20 @@ public partial class MainWindow : Window, IPairingPrompt
         var previous = _meshSession;
         var previousPeerUuid = _meshPeerUuid;
 
-        var current = MeshSession.FromTransport(transportClient, transportStream, peerUuid,
-            peerEndpoint.Ip, peerEndpoint.Port);
+        // Handlers go into FromTransport itself so they are attached before its read loop starts:
+        // a clip the peer sends right after reconnecting can never hit an unsubscribed event.
+        // The state handler only reads `current` once marshalled onto the UI thread, which is after
+        // this (UI-thread) method has assigned it below.
+        MeshSession? current = null;
+        current = MeshSession.FromTransport(transportClient, transportStream, peerUuid,
+            peerEndpoint.Ip, peerEndpoint.Port,
+            onMessageReceived: message => OnMeshMessageReceived(message, peerName),
+            onStateChanged: state => Dispatcher.InvokeAsync(() => OnMeshSessionStateChanged(current!, state)));
         _meshSession = current;
         _meshPeerUuid = peerUuid;
         _meshPeerName = peerName;
         _meshPeerEndpoint = peerEndpoint;
-        current.MessageReceived += message => OnMeshMessageReceived(message, peerName);
-        current.StateChanged += state => OnMeshSessionStateChanged(current, state);
+        _meshTrustLostSession = null; // only ever refers to a session this one has just replaced
         SessionStatusText.Text = $"Connected to {peerName}";
 
         if (previous == null) return;
@@ -252,43 +284,87 @@ public partial class MainWindow : Window, IPairingPrompt
 
     private void OnMeshSessionStateChanged(MeshSession session, MeshSessionState state)
     {
-        // Raised on MeshSession's background loops.
-        Dispatcher.InvokeAsync(() =>
+        // Runs on the UI thread (the handler passed to FromTransport marshals it here).
+        if (!ReferenceEquals(session, _meshSession)) return; // a replaced/disposed session
+        if (ReferenceEquals(session, _meshTrustLostSession)) return; // keep "Re-pairing required"
+        SessionStatusText.Text = state switch
         {
-            if (!ReferenceEquals(session, _meshSession)) return; // a replaced/disposed session
-            SessionStatusText.Text = state switch
-            {
-                MeshSessionState.Connected => $"Connected to {_meshPeerName}",
-                MeshSessionState.Reconnecting => $"Reconnecting to {_meshPeerName}...",
-                MeshSessionState.Disconnected => $"Disconnected from {_meshPeerName}",
-                _ => SessionStatusText.Text
-            };
-            if (state == MeshSessionState.Disconnected) _ = ReconnectMeshSessionAsync(session);
-        });
+            MeshSessionState.Connected => $"Connected to {_meshPeerName}",
+            MeshSessionState.Reconnecting => $"Reconnecting to {_meshPeerName}...",
+            MeshSessionState.Disconnected => $"Disconnected from {_meshPeerName}",
+            _ => SessionStatusText.Text
+        };
+        if (state == MeshSessionState.Disconnected) EnsureMeshReconnect(session);
     }
+
+    /// <summary>
+    /// Makes sure a reconnect loop is working on <paramref name="session"/>. At most one loop runs;
+    /// if one is already running (possibly still asleep in backoff for an older, since-replaced
+    /// session) it is retargeted to this session and picks it up when it wakes.
+    /// </summary>
+    private void EnsureMeshReconnect(MeshSession session)
+    {
+        var loopRunning = _meshReconnectTarget != null;
+        _meshReconnectTarget = session;
+        if (!loopRunning) _ = RunMeshReconnectLoopAsync();
+    }
+
+    /// <summary>A current session that is down and still worth reconnecting.</summary>
+    private bool NeedsMeshReconnect(MeshSession? session) =>
+        session != null && session.State != MeshSessionState.Connected &&
+        !ReferenceEquals(session, _meshTrustLostSession);
 
     /// <summary>
     /// UI-level reconnect orchestration. <see cref="MeshSession"/> only probes TCP reachability;
     /// re-establishing a usable channel needs a fresh TLS connection plus the trusted-reconnect
     /// handshake (identity + mutual trust, no PIN), which needs our identity and paired-device
-    /// store. Retries with backoff until a new session replaces <paramref name="stale"/> — either
-    /// from here, or because the peer reconnected to us through the accept loop.
+    /// store. Runs on the UI thread, so every check-then-act below is atomic with respect to the
+    /// state handler and the accept loop.
+    ///
+    /// The loop keeps going until the current <see cref="_meshSession"/> is healthy. Before every
+    /// sleep and after every wake/attempt it re-decides what to work on: a newer target set by
+    /// <see cref="EnsureMeshReconnect"/>, or — if its target was replaced (e.g. the peer reconnected
+    /// to us) — whatever session is current now, if that one is itself down. So a session that
+    /// drops while a loop for an older one is asleep is never left without a reconnect attempt.
+    ///
+    /// Only the side whose UUID sorts lower dials straight away (see
+    /// <see cref="PassiveReconnectGrace"/>); a peer whose trust check fails stops the loop for good.
     /// </summary>
-    private async Task ReconnectMeshSessionAsync(MeshSession stale)
+    private async Task RunMeshReconnectLoopAsync()
     {
-        if (_meshReconnectInFlight) return;
-        _meshReconnectInFlight = true;
-        var peerUuid = _meshPeerUuid!;
-        var peerName = _meshPeerName!;
+        MeshSession? target = null;
+        var attempt = 0;
         try
         {
-            for (var attempt = 0; ; attempt++)
+            while (true)
             {
-                var delay = MeshReconnectBackoff[Math.Min(attempt, MeshReconnectBackoff.Length - 1)];
+                if (!ReferenceEquals(target, _meshReconnectTarget))
+                {
+                    target = _meshReconnectTarget; // retargeted by a newer disconnect
+                    attempt = 0;
+                }
+                if (!ReferenceEquals(_meshSession, target))
+                {
+                    // Replaced while we were asleep or attempting. Adopt the replacement if it is
+                    // down too; otherwise there is nothing left to do.
+                    if (!NeedsMeshReconnect(_meshSession)) return;
+                    target = _meshReconnectTarget = _meshSession;
+                    attempt = 0;
+                }
+                if (!NeedsMeshReconnect(target)) return;
+
+                var peerUuid = _meshPeerUuid!;
+                var peerName = _meshPeerName!;
+                var isDialer = string.CompareOrdinal(_selfUuid, peerUuid) < 0;
+                var delay = isDialer
+                    ? MeshReconnectBackoff[Math.Min(attempt, MeshReconnectBackoff.Length - 1)]
+                    : attempt == 0 ? PassiveReconnectGrace : PassiveReconnectInterval;
+                attempt++;
                 try { await Task.Delay(delay, _shutdown.Token); }
                 catch (OperationCanceledException) { return; }
 
-                if (!ReferenceEquals(_meshSession, stale)) return; // already replaced
+                // Anything may have changed while asleep: re-decide before dialing.
+                if (!ReferenceEquals(target, _meshReconnectTarget) || !ReferenceEquals(_meshSession, target)) continue;
                 if (_pairingInFlight) continue; // a user/incoming pairing owns the floor; retry later
 
                 // Re-resolve every attempt: mDNS updates the peer's IP/port if it restarted or
@@ -296,22 +372,34 @@ public partial class MainWindow : Window, IPairingPrompt
                 var (ip, port) = ResolvePeerEndpoint(peerUuid, _meshPeerEndpoint);
                 if (port <= 0) continue; // listening port not known yet (incoming-only peer)
 
+                ReconnectAttemptResult result;
                 _pairingInFlight = true;
                 ConnectButton.IsEnabled = false;
                 try
                 {
-                    if (await TryTrustedReconnectAsync(peerUuid, peerName, ip, port)) return;
+                    result = await TryTrustedReconnectAsync(peerUuid, peerName, ip, port);
                 }
                 finally
                 {
                     _pairingInFlight = false;
                     ConnectButton.IsEnabled = true;
                 }
+
+                if (result == ReconnectAttemptResult.TrustLost && ReferenceEquals(_meshSession, target))
+                {
+                    // The peer answered as itself but the trust check failed (certificate changed,
+                    // or either side removed the pairing). No amount of retrying fixes that.
+                    _meshTrustLostSession = target;
+                    SessionStatusText.Text = $"Re-pairing required with {peerName}";
+                    StatusText.Text = $"{peerName} is no longer trusted (certificate changed or pairing " +
+                        "removed). Select it and press Connect to pair again.";
+                }
+                // Reconnected / TrustLost / Failed: the checks at the top decide whether to stop.
             }
         }
         finally
         {
-            _meshReconnectInFlight = false;
+            _meshReconnectTarget = null;
         }
     }
 
@@ -319,8 +407,12 @@ public partial class MainWindow : Window, IPairingPrompt
     /// One silent trusted-reconnect attempt: connect, exchange identities, and proceed only if the
     /// peer is the expected one and both sides still trust each other. Never prompts the user —
     /// a peer that is no longer trusted needs an explicit re-pair via the Connect button.
+    /// Returns <see cref="ReconnectAttemptResult.TrustLost"/> only when the expected peer answered
+    /// but trust failed on either side (permanent); network errors, a busy peer or a different
+    /// device on that endpoint are <see cref="ReconnectAttemptResult.Failed"/> (worth retrying).
     /// </summary>
-    private async Task<bool> TryTrustedReconnectAsync(string peerUuid, string peerName, string ip, int port)
+    private async Task<ReconnectAttemptResult> TryTrustedReconnectAsync(string peerUuid, string peerName,
+        string ip, int port)
     {
         PairingSession session;
         try
@@ -329,7 +421,7 @@ public partial class MainWindow : Window, IPairingPrompt
         }
         catch (Exception)
         {
-            return false;
+            return ReconnectAttemptResult.Failed;
         }
 
         using (session)
@@ -337,14 +429,18 @@ public partial class MainWindow : Window, IPairingPrompt
             try
             {
                 await session.ExchangeIdentityAsync(_selfUuid, _selfName);
-                if (session.PeerUuid != peerUuid || !session.IsPeerTrusted(_pairedDevicesPath, peerUuid))
-                    return false;
+                // Someone else now on that IP:port (e.g. DHCP reuse): not our peer, keep trying.
+                if (session.PeerUuid != peerUuid) return ReconnectAttemptResult.Failed;
+                // Our peer, but its certificate no longer matches our record (or the record is gone).
+                if (!session.IsPeerTrusted(_pairedDevicesPath, peerUuid)) return ReconnectAttemptResult.TrustLost;
+                // ExchangeTrustAsync returns false only if the peer explicitly answered "not
+                // trusted"; a busy/closed peer throws instead and lands in the catch below.
                 if (!await session.ExchangeTrustAsync(localTrustsPeer: true))
-                    return false;
+                    return ReconnectAttemptResult.TrustLost;
             }
             catch (Exception)
             {
-                return false;
+                return ReconnectAttemptResult.Failed;
             }
 
             // Same bookkeeping RunAsync does on a trusted reconnect.
@@ -359,7 +455,7 @@ public partial class MainWindow : Window, IPairingPrompt
             var name = session.PeerName ?? peerName;
             await AttachMeshSessionAsync(session, peerUuid, name, (ip, port));
             StatusText.Text = $"Reconnected to {name} (trusted).";
-            return true;
+            return ReconnectAttemptResult.Reconnected;
         }
     }
 
