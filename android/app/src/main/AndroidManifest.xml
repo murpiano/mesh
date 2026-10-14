@@ -6,6 +6,7 @@
     <application
         android:label="Mesh"
         android:icon="@mipmap/ic_launcher"
+        android:theme="@style/AppTheme"
         android:allowBackup="false">
         <activity
             android:name=".ui.MainActivity"
