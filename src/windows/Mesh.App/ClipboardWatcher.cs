@@ -7,6 +7,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using Mesh.Core;
 
 namespace Mesh.App;
 
@@ -30,7 +31,7 @@ public sealed class ClipboardWatcher : IDisposable
     public event Action<string>? TextCopied;
 
     private readonly HwndSource _source;
-    private DateTimeOffset _suppressUntil = DateTimeOffset.MinValue;
+    private readonly ClipboardSuppressionWindow _suppression = new();
     private bool _disposed;
 
     public ClipboardWatcher(Window window)
@@ -46,14 +47,14 @@ public sealed class ClipboardWatcher : IDisposable
     /// button on a history entry) so that resulting change notification isn't re-pushed.</summary>
     public void SuppressNextChange(TimeSpan window)
     {
-        _suppressUntil = DateTimeOffset.UtcNow + window;
+        _suppression.SuppressNextChange(window);
     }
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (msg == WM_CLIPBOARDUPDATE)
         {
-            if (DateTimeOffset.UtcNow < _suppressUntil)
+            if (_suppression.ShouldSuppress())
             {
                 return IntPtr.Zero;
             }

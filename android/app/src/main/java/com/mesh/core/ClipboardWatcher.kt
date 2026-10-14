@@ -12,12 +12,12 @@ import android.content.Context
  */
 class ClipboardWatcher(context: Context) {
     private val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    private var suppressUntilMs = 0L
+    private val suppression = ClipboardSuppressionWindow()
 
     var onTextCopied: ((String) -> Unit)? = null
 
     private val listener = ClipboardManager.OnPrimaryClipChangedListener {
-        if (System.currentTimeMillis() < suppressUntilMs) return@OnPrimaryClipChangedListener
+        if (suppression.shouldSuppress()) return@OnPrimaryClipChangedListener
         val clip = clipboardManager.primaryClip
         if (clip != null && clip.itemCount > 0) {
             val text = clip.getItemAt(0).text?.toString()
@@ -36,6 +36,6 @@ class ClipboardWatcher(context: Context) {
     /** Call right before the app writes to the clipboard itself (e.g. a "Copy" button on a
      * history entry) so the resulting change notification isn't re-pushed. */
     fun suppressNextChange(windowMs: Long) {
-        suppressUntilMs = System.currentTimeMillis() + windowMs
+        suppression.suppressNextChange(windowMs)
     }
 }
