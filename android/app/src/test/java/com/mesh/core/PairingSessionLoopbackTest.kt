@@ -346,15 +346,25 @@ class PairingSessionLoopbackTest {
     @Test
     fun detachTransport_makesCloseNoOp_andLeavesSocketUsable() = runBlocking {
         val (server, client) = connectPair(idA, idB)
+        val serverTransport = server.detachTransport()
+        val clientTransport = client.detachTransport()
         try {
-            val transport = server.detachTransport()
             server.close() // must now be a no-op
+            client.close() // must now be a no-op
 
-            assertFalse(transport.socket.isClosed)
+            assertFalse(serverTransport.socket.isClosed)
+            assertFalse(clientTransport.socket.isClosed)
 
-            transport.socket.close()
+            // Prove the detached streams still carry protocol bytes end-to-end, not just that the socket object exists.
+            val payload = "hello".toByteArray()
+            clientTransport.output.write(payload)
+            clientTransport.output.flush()
+            val received = ByteArray(payload.size)
+            serverTransport.input.readFully(received)
+            assertEquals("hello", String(received))
         } finally {
-            client.close()
+            serverTransport.socket.close()
+            clientTransport.socket.close()
         }
     }
 }
