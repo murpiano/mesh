@@ -155,12 +155,15 @@ public partial class MainWindow : Window, IPairingPrompt
         {
             var outcome = await session.RunAsync(_selfUuid, _selfName, _pairedDevicesPath, this);
             var peerName = outcome.PeerName ?? session.PeerIp;
-            // A trusted reconnect from the peer we already have a mesh session with is the peer's
-            // background reconnect replacing that session: report it quietly, the same way our own
-            // background reconnect does, instead of popping a dialog on every network blip.
-            var isBackgroundReconnect = outcome.Result == PairingResult.Reconnected &&
-                _meshSession != null && _meshPeerUuid == outcome.PeerUuid;
-            if (isBackgroundReconnect)
+            // RunAsync only returns Reconnected after the peer's certificate already matched our
+            // trust record, so it is always a background reconnect of an already-paired device,
+            // never a new pairing. Report it quietly (status text only), the same way our own
+            // outgoing background reconnect does, instead of popping a dialog on every network
+            // blip. (Previously this also required _meshSession/_meshPeerUuid to already point at
+            // this peer, which missed the reconnect right after an app restart — and any other
+            // case where that bookkeeping lagged behind reality — popping the dialog every single
+            // time the peer reconnected in a loop.)
+            if (outcome.Result == PairingResult.Reconnected)
                 StatusText.Text = $"Reconnected to {peerName} (trusted).";
             else
                 ShowOutcome(outcome, peerName);
