@@ -10,14 +10,14 @@ public abstract class MeshMessage
         switch (message)
         {
             case ClipboardPushMessage push:
-                await stream.WriteAsync(new[] { ClipboardPushTag });
+                await PairingProtocol.WriteByteAsync(stream, ClipboardPushTag);
                 var tsBytes = BitConverter.GetBytes(push.Timestamp.ToUnixTimeMilliseconds());
                 if (BitConverter.IsLittleEndian) Array.Reverse(tsBytes);
-                await stream.WriteAsync(tsBytes);
+                await PairingProtocol.WriteBytesAsync(stream, tsBytes);
                 await PairingProtocol.WriteStringAsync(stream, push.Text);
                 break;
             case HeartbeatMessage:
-                await stream.WriteAsync(new[] { HeartbeatTag });
+                await PairingProtocol.WriteByteAsync(stream, HeartbeatTag);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(message), "Unknown message type.");
@@ -27,35 +27,22 @@ public abstract class MeshMessage
 
     public static async Task<MeshMessage> ReadAsync(Stream stream)
     {
-        var tagBuf = new byte[1];
-        await ReadExactAsync(stream, tagBuf);
-        return tagBuf[0] switch
+        var tag = await PairingProtocol.ReadByteAsync(stream);
+        return tag switch
         {
             ClipboardPushTag => await ReadClipboardPushAsync(stream),
             HeartbeatTag => new HeartbeatMessage(),
-            _ => throw new InvalidDataException($"Unknown message tag: {tagBuf[0]}")
+            _ => throw new InvalidDataException($"Unknown message tag: {tag}")
         };
     }
 
     private static async Task<ClipboardPushMessage> ReadClipboardPushAsync(Stream stream)
     {
-        var tsBuf = new byte[8];
-        await ReadExactAsync(stream, tsBuf);
+        var tsBuf = await PairingProtocol.ReadBytesAsync(stream, 8);
         if (BitConverter.IsLittleEndian) Array.Reverse(tsBuf);
         var timestamp = DateTimeOffset.FromUnixTimeMilliseconds(BitConverter.ToInt64(tsBuf));
         var text = await PairingProtocol.ReadStringAsync(stream);
         return new ClipboardPushMessage(timestamp, text);
-    }
-
-    private static async Task ReadExactAsync(Stream stream, byte[] buffer)
-    {
-        var offset = 0;
-        while (offset < buffer.Length)
-        {
-            var read = await stream.ReadAsync(buffer.AsMemory(offset, buffer.Length - offset));
-            if (read == 0) throw new EndOfStreamException();
-            offset += read;
-        }
     }
 }
 
