@@ -1,58 +1,25 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:orientation="vertical"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:padding="16dp">
+    android:orientation="vertical">
 
-    <LinearLayout
-        android:id="@+id/mdnsErrorBanner"
-        android:orientation="horizontal"
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/tabLayout"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="#FFFDECEA"
-        android:padding="8dp"
-        android:layout_marginBottom="8dp"
-        android:gravity="center_vertical"
-        android:visibility="gone">
-
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="mDNS unreachable — check firewall settings"/>
-
-        <Button
-            android:id="@+id/refreshButton"
+        android:layout_height="wrap_content">
+        <com.google.android.material.tabs.TabItem
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Refresh"/>
-    </LinearLayout>
+            android:text="Devices" />
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Clipboard" />
+    </com.google.android.material.tabs.TabLayout>
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Discovered devices"
-        android:textStyle="bold"
-        android:layout_marginBottom="8dp"/>
-
-    <ListView
-        android:id="@+id/deviceListView"
+    <FrameLayout
+        android:id="@+id/fragmentContainer"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:choiceMode="singleChoice"/>
-
-    <Button
-        android:id="@+id/connectButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:enabled="false"
-        android:text="Connect"/>
-
-    <TextView
-        android:id="@+id/statusText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:textColor="#FF757575"/>
+        android:layout_weight="1"/>
 </LinearLayout>
