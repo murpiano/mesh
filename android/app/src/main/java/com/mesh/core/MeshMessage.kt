@@ -20,7 +20,11 @@ sealed class MeshMessage {
         private const val CLIPBOARD_PUSH_TAG = 0x01
         private const val HEARTBEAT_TAG = 0x02
 
-        /** 1 MiB of UTF-16 chars expands to at most 4 bytes per char in UTF-8. */
+        /**
+         * 1 MiB of UTF-16 code units expands to at most 3 bytes per code unit in UTF-8 (a
+         * surrogate pair contributes 4 bytes across 2 code units, not 4 bytes per single code
+         * unit) — 4x gives comfortable headroom over that worst case.
+         */
         const val MAX_TEXT_BYTES = 4 * 1_048_576
 
         fun write(output: DataOutputStream, message: MeshMessage) {

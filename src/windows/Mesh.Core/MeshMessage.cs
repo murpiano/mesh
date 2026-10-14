@@ -9,8 +9,10 @@ public abstract class MeshMessage
     private const byte HeartbeatTag = 0x02;
 
     /// <summary>
-    /// Upper bound on a ClipboardPush text field's UTF-8 byte length. 1 MiB of UTF-16 chars
-    /// expands to at most 4 bytes per char in UTF-8. Deliberately independent of
+    /// Upper bound on a ClipboardPush text field's UTF-8 byte length. 1 MiB of UTF-16 code units
+    /// expands to at most 3 bytes per code unit in UTF-8 (a surrogate pair contributes 4 bytes
+    /// across 2 code units, not 4 bytes per single code unit); 4x gives comfortable headroom
+    /// over that worst case. Deliberately independent of
     /// <see cref="PairingProtocol.MaxStringBytes"/>, which is sized for short handshake strings.
     /// </summary>
     public const int MaxTextBytes = 4 * 1_048_576;

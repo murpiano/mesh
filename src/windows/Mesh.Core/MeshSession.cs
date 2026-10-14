@@ -42,6 +42,11 @@ public sealed class MeshSession : IDisposable
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly Queue<MeshMessage> _pendingSend = new();
     private DateTimeOffset _lastReceivedAt = DateTimeOffset.UtcNow;
+    // Test-only seam: production call sites always take the static defaults above. Letting tests
+    // pass short durations lets them exercise the real heartbeat/idle-timeout loop without
+    // waiting out the real 20s/45s production intervals.
+    private readonly TimeSpan _heartbeatInterval;
+    private readonly TimeSpan _idleTimeout;
     // Backing store for the session state, accessed only via Volatile.Read / Interlocked.Exchange
     // (see State / TransitionTo) so concurrent transitions from the read/heartbeat/reconnect loops
     // and SendAsync never race on the field itself and never double-fire StateChanged.
@@ -52,13 +57,16 @@ public sealed class MeshSession : IDisposable
     /// for sending purposes until the owner replaces it (see the class remarks on reconnect).</summary>
     public MeshSessionState State => (MeshSessionState)Volatile.Read(ref _stateValue);
 
-    private MeshSession(TcpClient client, SslStream stream, string peerUuid, string peerIp, int peerPort)
+    private MeshSession(TcpClient client, SslStream stream, string peerUuid, string peerIp, int peerPort,
+        TimeSpan heartbeatInterval, TimeSpan idleTimeout)
     {
         _client = client;
         _stream = stream;
         _peerUuid = peerUuid;
         _peerIp = peerIp;
         _peerPort = peerPort;
+        _heartbeatInterval = heartbeatInterval;
+        _idleTimeout = idleTimeout;
     }
 
     /// <summary>
@@ -67,11 +75,16 @@ public sealed class MeshSession : IDisposable
     /// subscribing to the events afterwards: they are attached before the loops start, so a message
     /// the peer sent immediately (already buffered on the stream, whose first read can complete
     /// synchronously inside this call) can never be raised with no subscriber and silently dropped.
+    /// <paramref name="heartbeatInterval"/>/<paramref name="idleTimeout"/> are a test-only seam
+    /// (production callers always take the defaults) so tests can exercise the real loop without
+    /// waiting out the real production intervals.
     /// </summary>
     public static MeshSession FromTransport(TcpClient client, SslStream stream, string peerUuid, string peerIp,
-        int peerPort, Action<MeshMessage>? onMessageReceived = null, Action<MeshSessionState>? onStateChanged = null)
+        int peerPort, Action<MeshMessage>? onMessageReceived = null, Action<MeshSessionState>? onStateChanged = null,
+        TimeSpan? heartbeatInterval = null, TimeSpan? idleTimeout = null)
     {
-        var session = new MeshSession(client, stream, peerUuid, peerIp, peerPort);
+        var session = new MeshSession(client, stream, peerUuid, peerIp, peerPort,
+            heartbeatInterval ?? HeartbeatInterval, idleTimeout ?? IdleTimeout);
         if (onMessageReceived != null) session.MessageReceived += onMessageReceived;
         if (onStateChanged != null) session.StateChanged += onStateChanged;
         _ = session.RunReadLoopAsync(session._lifetimeCts.Token);
@@ -173,20 +186,52 @@ public sealed class MeshSession : IDisposable
     {
         while (!ct.IsCancellationRequested)
         {
-            try { await Task.Delay(HeartbeatInterval, ct); }
+            try { await Task.Delay(_heartbeatInterval, ct); }
             catch (OperationCanceledException) { return; }
 
-            if (State == MeshSessionState.Connected)
+            if (State != MeshSessionState.Connected) continue;
+
+            // The idle-timeout check must run regardless of whether the send lock below can be
+            // acquired: a heartbeat send stuck behind an in-flight large-clip write (peer asleep,
+            // TCP send buffer full) must never prevent us from noticing a dead connection. Do NOT
+            // gate this on a successful lock acquisition.
+            if (DateTimeOffset.UtcNow - _lastReceivedAt > _idleTimeout)
             {
-                if (DateTimeOffset.UtcNow - _lastReceivedAt > IdleTimeout)
-                {
-                    TransitionTo(MeshSessionState.Disconnected);
-                    StartReconnectLoop();
-                    continue;
-                }
-                try { await SendAsync(new HeartbeatMessage()); }
-                catch { /* SendAsync already handles failure by reconnecting */ }
+                TransitionTo(MeshSessionState.Disconnected);
+                StartReconnectLoop();
+                continue;
             }
+
+            await TrySendHeartbeatAsync();
+        }
+    }
+
+    /// <summary>
+    /// Non-blocking heartbeat send: if <see cref="_sendLock"/> is already held by an in-flight
+    /// <see cref="SendAsync"/> (e.g. a large clip currently being written), skip sending the
+    /// heartbeat this cycle rather than block waiting for the lock. The idle-timeout check in
+    /// <see cref="RunHeartbeatLoopAsync"/> runs independently of this and is what actually
+    /// detects a dead connection.
+    /// </summary>
+    private async Task TrySendHeartbeatAsync()
+    {
+        if (!_sendLock.Wait(0)) return; // a send is already in progress; skip this cycle
+        try
+        {
+            if (State != MeshSessionState.Connected || _stream == null) return;
+            try
+            {
+                await MeshMessage.WriteAsync(_stream, new HeartbeatMessage());
+            }
+            catch
+            {
+                TransitionTo(MeshSessionState.Disconnected);
+                StartReconnectLoop();
+            }
+        }
+        finally
+        {
+            _sendLock.Release();
         }
     }
 
@@ -261,6 +306,16 @@ public sealed class MeshSession : IDisposable
         var previous = (MeshSessionState)Interlocked.Exchange(ref _stateValue, (int)state);
         if (previous != state)
         {
+            if (state == MeshSessionState.Disconnected)
+            {
+                // Close the transport so a write currently stuck trying to flush into a now-dead
+                // connection (e.g. peer asleep, TCP send buffer full) unblocks immediately with an
+                // IOException/ObjectDisposedException instead of hanging until the OS's own TCP
+                // retransmission timeout (which can be ~15 minutes). The unblocked SendAsync then
+                // correctly routes the message into the pending-send queue via its existing catch.
+                try { _stream?.Dispose(); } catch { /* best effort */ }
+                try { _client?.Dispose(); } catch { /* best effort */ }
+            }
             StateChanged?.Invoke(state);
         }
     }

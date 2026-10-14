@@ -140,4 +140,39 @@ class MeshSessionTest {
             client.close()
         }
     }
+
+    /**
+     * Finding I1 regression test: a stuck send (simulated here by holding [MeshSession.sendMutex]
+     * for the whole test, as a large clip write stuck on a dead/slow peer would) must not prevent
+     * the heartbeat loop's idle-timeout check from firing. Before the fix, the heartbeat loop
+     * only ran its idle check right before trying to send a heartbeat through the SAME lock, so
+     * a stuck send blocked the idle check indefinitely too. Uses short test-only intervals
+     * (passed into `fromTransport`) instead of the real 20s/45s production values.
+     */
+    @Test
+    fun `heartbeat loop idle-timeout fires even while send lock is held by a stuck send`() = runBlocking {
+        val (serverPairing, clientPairing) = connectPair(idA, idB)
+        val server = MeshSession.fromTransport(serverPairing.detachTransport(), "peer-client", "127.0.0.1", 0)
+        val states = mutableListOf<MeshSessionState>()
+        val client = MeshSession.fromTransport(
+            clientPairing.detachTransport(), "peer-server", "127.0.0.1", 0,
+            onStateChanged = { states.add(it) },
+            heartbeatIntervalMs = 50L,
+            idleTimeoutMs = 200L
+        )
+        try {
+            // Simulate a send stuck mid-write (peer asleep, TCP buffer full): hold the lock for
+            // the rest of the test and never release it. If the heartbeat loop still blocked on
+            // this lock to run its idle check, DISCONNECTED would never fire below.
+            client.sendMutex.lock()
+
+            delay(2000)
+            assertTrue(
+                "expected DISCONNECTED to fire from the idle-timeout check despite the held send lock",
+                states.contains(MeshSessionState.DISCONNECTED)
+            )
+        } finally {
+            server.close(); client.close()
+        }
+    }
 }

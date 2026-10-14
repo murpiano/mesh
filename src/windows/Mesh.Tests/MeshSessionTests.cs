@@ -1,5 +1,6 @@
 using Mesh.Core;
 using System.Collections.Concurrent;
+using System.Reflection;
 using Xunit;
 
 namespace Mesh.Tests;
@@ -169,6 +170,45 @@ public class MeshSessionTests
             oldClient.Dispose();
             newServer?.Dispose();
             newClient?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Finding I1 regression test: a stuck send (simulated here by holding the private
+    /// <c>_sendLock</c> for the whole test, as a large clip write stuck on a dead/slow peer
+    /// would) must not prevent the heartbeat loop's idle-timeout check from firing. Before the
+    /// fix, the heartbeat loop only ran its idle check right before sending a heartbeat through
+    /// the SAME lock (via <c>SendAsync</c>'s blocking <c>WaitAsync()</c>), so a stuck send blocked
+    /// the idle check indefinitely too. Uses <c>FromTransport</c>'s test-only
+    /// heartbeatInterval/idleTimeout overrides instead of waiting out the real 20s/45s production
+    /// values.
+    /// </summary>
+    [Fact]
+    public async Task RunHeartbeatLoop_IdleTimeoutFires_EvenWhileSendLockHeldByStuckSend()
+    {
+        var (serverTransport, clientTransport) = await CreateTransportsAsync(51898);
+        var server = MeshSession.FromTransport(serverTransport.Client, serverTransport.Stream,
+            "peer-uuid-client", "127.0.0.1", 51898);
+        var states = new ConcurrentQueue<MeshSessionState>();
+        var client = MeshSession.FromTransport(clientTransport.Client, clientTransport.Stream,
+            "peer-uuid-server", "127.0.0.1", 51898, onStateChanged: states.Enqueue,
+            heartbeatInterval: TimeSpan.FromMilliseconds(50), idleTimeout: TimeSpan.FromMilliseconds(200));
+        try
+        {
+            var sendLockField = typeof(MeshSession).GetField("_sendLock", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var sendLock = (SemaphoreSlim)sendLockField.GetValue(client)!;
+            // Simulate a send stuck mid-write (peer asleep, TCP buffer full): hold the lock
+            // for the rest of the test and never release it. If the heartbeat loop still
+            // blocked on this lock to run its idle check, Disconnected would never fire below.
+            await sendLock.WaitAsync();
+
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            Assert.Contains(MeshSessionState.Disconnected, states);
+        }
+        finally
+        {
+            server.Dispose();
+            client.Dispose();
         }
     }
 }

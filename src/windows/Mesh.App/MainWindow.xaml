@@ -43,7 +43,7 @@
                                         Click="CopyHistoryEntry_Click" Tag="{Binding}"/>
                                 <StackPanel Margin="8,0,0,0">
                                     <TextBlock Text="{Binding Source}" FontWeight="Bold" FontSize="11"/>
-                                    <TextBlock Text="{Binding Text}" TextWrapping="Wrap" MaxWidth="300"/>
+                                    <TextBlock Text="{Binding DisplayText}" TextWrapping="Wrap" MaxWidth="300"/>
                                 </StackPanel>
                             </StackPanel>
                         </DataTemplate>

@@ -444,12 +444,21 @@ public partial class MainWindow : Window, IPairingPrompt
             }
 
             // Same bookkeeping RunAsync does on a trusted reconnect.
-            var record = PairedDeviceStore.Find(_pairedDevicesPath, peerUuid);
-            if (record != null)
+            try
             {
-                record.LastIp = session.PeerIp;
-                record.Name = session.PeerName ?? record.Name;
-                PairedDeviceStore.Upsert(_pairedDevicesPath, record);
+                var record = PairedDeviceStore.Find(_pairedDevicesPath, peerUuid);
+                if (record != null)
+                {
+                    record.LastIp = session.PeerIp;
+                    record.Name = session.PeerName ?? record.Name;
+                    PairedDeviceStore.Upsert(_pairedDevicesPath, record);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Bookkeeping only; the channel is authenticated and usable regardless. An IO
+                // failure here must not strand the reconnect loop for this session.
+                StatusText.Text = $"Could not update paired-device record: {ex.Message}";
             }
 
             var name = session.PeerName ?? peerName;
@@ -495,7 +504,11 @@ public partial class MainWindow : Window, IPairingPrompt
         ClipboardEntry entry;
         try
         {
-            entry = ClipboardHistoryStore.Insert(_clipboardDbPath, push.Text, peerName, push.Timestamp);
+            // Sort/evict by LOCAL receipt time, not the sender's clock (push.Timestamp is
+            // informational-only metadata, carried as-is in the wire message): clock skew
+            // between devices must not cause a just-arrived clip to be evicted early, or a
+            // stale clip to stick at the top of the list.
+            entry = ClipboardHistoryStore.Insert(_clipboardDbPath, push.Text, peerName, DateTimeOffset.UtcNow);
         }
         catch (Exception ex)
         {

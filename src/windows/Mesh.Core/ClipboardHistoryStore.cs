@@ -3,7 +3,22 @@ using Microsoft.Data.Sqlite;
 
 namespace Mesh.Core;
 
-public sealed record ClipboardEntry(long Id, string Text, string Source, DateTimeOffset Timestamp);
+public sealed record ClipboardEntry(long Id, string Text, string Source, DateTimeOffset Timestamp)
+{
+    /// <summary>Longest <see cref="Text"/> prefix the history list UI will render directly.</summary>
+    public const int DisplayTextMaxLength = 500;
+
+    /// <summary>
+    /// <see cref="Text"/> truncated to <see cref="DisplayTextMaxLength"/> characters (plus an
+    /// ellipsis) for list-view rendering. Clips can be up to 4 MiB of text; rendering that much
+    /// through a wrapping <c>TextBlock</c> with no cap can freeze the WPF layout thread, so the
+    /// view binds to this instead of <see cref="Text"/>. The "Copy" action still uses the full,
+    /// untruncated <see cref="Text"/> (it binds to the whole entry via the button's Tag).
+    /// </summary>
+    public string DisplayText => Text.Length > DisplayTextMaxLength
+        ? Text[..DisplayTextMaxLength] + "…"
+        : Text;
+}
 
 public static class ClipboardHistoryStore
 {

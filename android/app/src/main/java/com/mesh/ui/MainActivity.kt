@@ -574,7 +574,11 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
         // Called on MeshSession's read loop (IO thread); the channel is thread-safe.
         if (message !is ClipboardPush) return
         if (message.text.length > MAX_CLIPBOARD_TEXT_LENGTH) return
-        val entry = ClipboardEntry(text = message.text, source = peerName, timestamp = message.timestamp)
+        // Sort/evict by LOCAL receipt time, not the sender's clock (message.timestamp is
+        // informational-only metadata, carried as-is in the wire message): clock skew between
+        // devices must not cause a just-arrived clip to be evicted early, or a stale clip to
+        // stick at the top of the list.
+        val entry = ClipboardEntry(text = message.text, source = peerName, timestamp = System.currentTimeMillis())
         historyOps.trySend(HistoryOp.Add(entry, pushToPeer = false))
     }
 
