@@ -9,22 +9,22 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.DataInputStream
 import java.io.DataOutputStream
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.SSLSocket
 
 enum class MeshSessionState { CONNECTED, DISCONNECTED, RECONNECTING }
 
 /**
- * A persistent, reconnecting channel to a paired peer, carrying framed [MeshMessage] traffic
- * after the pairing handshake completes. Owns the transport from the point it is constructed
- * (via [fromTransport]) until [close].
+ * A channel to a paired peer, carrying framed [MeshMessage] traffic after the pairing handshake
+ * completes. Owns the transport from the point it is constructed (via [fromTransport]) until
+ * [close].
  *
- * The reconnect loop here is intentionally minimal: on disconnect it only probes that the
- * peer's address is reachable again, then stops, handing control back to the caller for the
- * actual trusted-reconnect handshake (re-running PairingSession.connect + isPeerTrusted +
- * detachTransport and replacing this MeshSession instance) — mirroring the Windows design.
+ * This class only detects that the transport died (read/write failure, or no traffic within the
+ * idle timeout) and reports it via [onStateChanged] == DISCONNECTED; it does not reconnect
+ * itself. The owner (MainActivity) listens for that event and re-runs PairingSession.connect +
+ * isPeerTrusted + detachTransport on success, constructing a fresh [MeshSession] via
+ * [fromTransport] to replace this one — the single reconnect loop and policy (dialer/passive
+ * tie-break, backoff) live there.
  */
 class MeshSession private constructor(
     private var socket: SSLSocket?,
@@ -42,8 +42,6 @@ class MeshSession private constructor(
     companion object {
         private const val HEARTBEAT_INTERVAL_MS = 20_000L
         private const val IDLE_TIMEOUT_MS = 45_000L
-        private val BACKOFF_STEPS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000)
-        private const val MAX_BACKOFF_MS = 30_000L
 
         /**
          * Builds a session from an already-open, authenticated transport and starts its
@@ -120,12 +118,13 @@ class MeshSession private constructor(
 
     /**
      * Empties the pending-send queue (messages queued by [send] while disconnected, or after a
-     * failed send) and returns its [ClipboardPush] contents in order, discarding any queued
-     * [Heartbeat] entries. The caller (reconnect orchestration) is responsible for re-sending
-     * the drained messages through a replacement session.
+     * failed send) and returns everything except queued [Heartbeat] entries, in order — a
+     * heartbeat is only meaningful on the transport it was generated for. The caller (reconnect
+     * orchestration) is responsible for re-sending the drained messages through a replacement
+     * session.
      */
     suspend fun drainPendingSends(): List<MeshMessage> = sendMutex.withLock {
-        val drained = pendingSend.filterIsInstance<ClipboardPush>()
+        val drained = pendingSend.filter { it !is Heartbeat }
         pendingSend.clear()
         drained
     }
@@ -189,26 +188,6 @@ class MeshSession private constructor(
         }
     }
 
-    private suspend fun reconnectLoop() {
-        transitionTo(MeshSessionState.RECONNECTING)
-        var attempt = 0
-        while (job.isActive) {
-            attempt++
-            try {
-                val probe = Socket()
-                probe.connect(InetSocketAddress(peerIp, peerPort), 3_000)
-                probe.close()
-                // Signal: the peer's address is reachable again. The caller (reconnect
-                // orchestration layer) must now re-run the trusted-peer TLS handshake and
-                // replace this MeshSession instance; this loop's job is done.
-                return
-            } catch (e: Exception) {
-                val delayMs = if (attempt <= BACKOFF_STEPS_MS.size) BACKOFF_STEPS_MS[attempt - 1] else MAX_BACKOFF_MS
-                delay(delayMs)
-            }
-        }
-    }
-
     /** Atomic exchange-and-compare: fires [onStateChanged] only if the state actually changed. */
     private fun transitionTo(newState: MeshSessionState): Boolean {
         val previous = stateRef.getAndSet(newState)
@@ -220,7 +199,6 @@ class MeshSession private constructor(
     private fun markDisconnected() {
         if (transitionTo(MeshSessionState.DISCONNECTED)) {
             try { socket?.close() } catch (e: Exception) { /* already closing */ }
-            scope.launch { reconnectLoop() }
         }
     }
 

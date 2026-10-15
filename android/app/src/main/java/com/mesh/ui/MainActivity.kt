@@ -1,67 +1,98 @@
 package com.mesh.ui
 
+import android.Manifest
+import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
+import androidx.activity.addCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
-import com.google.android.material.tabs.TabLayout
 import com.mesh.R
 import com.mesh.core.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.security.PrivateKey
 import java.security.cert.X509Certificate
+import java.util.UUID
 
 /**
- * Tab host (Devices / Clipboard) and owner of everything cross-cutting: identity, discovery,
+ * Tab host (Devices / Chat) and owner of everything cross-cutting: identity, discovery,
  * the incoming-pairing accept loop, the pairing flows, the persistent [MeshSession] to the
- * paired peer with its reconnect orchestration, the clipboard watcher and the clipboard history
- * writes. The fragments are view layers over this state (tab switches replace them), so nothing
- * here stops or is lost while a tab is hidden.
+ * paired peer with its reconnect orchestration, and the chat history for that peer (sent
+ * messages, received messages, and cross-device history sync on every attach).
  *
  * Threading: everything below runs on Main unless stated otherwise. MeshSession callbacks arrive
- * on its IO threads and are marshalled onto Main (state changes) or into [historyOps] (clips).
+ * on its IO threads and are marshalled onto Main via lifecycleScope.launch(Dispatchers.Main).
  */
 class MainActivity : AppCompatActivity(), PairingPrompt {
     companion object {
-        /** Clipboard texts longer than this (1 MiB of chars) are neither stored nor pushed. */
-        private const val MAX_CLIPBOARD_TEXT_LENGTH = 1_048_576
-        private const val CLIPBOARD_SELF_WRITE_SUPPRESS_MS = 500L
+        /** Chat texts longer than this (4 MiB of chars) are neither stored nor sent. Mirrors
+         * MeshMessage.MAX_TEXT_BYTES' header room (worst case 3 bytes/char in UTF-8). */
+        private const val MAX_CHAT_TEXT_LENGTH = 4 * 1_048_576
     }
 
     private enum class ReconnectAttemptResult { RECONNECTED, FAILED, TRUST_LOST }
 
     // Devices-tab state (rendered by DevicesFragment) --------------------------------------
 
-    internal val devices = mutableListOf<DiscoveredDevice>()
-    internal var selectedUuid: String? = null
+    // mDNS-visible devices right now, keyed implicitly by uuid; merged with the paired-device
+    // store in rebuildDeviceRows() to produce deviceRows. Not rendered directly any more.
+    private val devices = mutableListOf<DiscoveredDevice>()
+    internal var deviceRows: List<DeviceRow> = emptyList()
+        private set
     internal var statusMessage: String = ""
         private set
     internal var mdnsErrorVisible = false
         private set
-    internal val connectEnabled: Boolean get() = identityReady && !pairingInFlight
+
+    // The device a pair/connect attempt is currently in flight for (shows "..." on its Connect
+    // button); null when nothing is connecting. Dialer-only placeholder dialog, shown just for
+    // first-time pairing (the dialer never sees the PIN, so there is nothing to show until the
+    // listener approves — see PairingPrompt.enterPin below).
+    private var connectingUuid: String? = null
+    private var pendingConnectingDialog: AlertDialog? = null
+    // Dialer side only: the outgoing PairingSession currently in flight, so a Cancel tap on the
+    // "Connecting..." placeholder (before the listener has even answered) can abort it by
+    // closing the socket, same mechanism as pendingIncomingSession on the listener side.
+    private var pendingDialerSession: PairingSession? = null
+    // Listener side only: the PIN confirm dialog for the incoming pairing attempt currently in
+    // flight, kept open (showing "Connecting...") after Allow is tapped instead of dismissing
+    // right away. Dismissed once handleIncoming's run() call actually finishes.
+    private var pendingPinDialog: AlertDialog? = null
+    // Listener side only: the incoming PairingSession currently in flight, so a Cancel tap on
+    // the "Connecting..." PIN dialog (after the user already tapped Allow) can abort it by
+    // closing the socket — PairingSession.run's own exception handling turns that into a
+    // PAIRING_FAILED outcome instead of crashing.
+    private var pendingIncomingSession: PairingSession? = null
 
     private lateinit var discovery: MeshDiscovery
     private var identity: Pair<X509Certificate, PrivateKey>? = null
     private var selfUuid: String? = null
     private val selfName: String = Build.MODEL
     private var listener: PairingListener? = null
-    private var identityReady = false
+
+    // Notifications aren't required for the foreground service to work, only to show it — the
+    // service starts regardless of whether this is granted.
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     // All pairing work (user Connect, incoming, background reconnect attempts) runs on Main, so
     // a plain flag keeps a double-tap or an incoming connection from racing an attempt that is
     // already in flight. It also serialises every attachMeshSession call.
     private var pairingInFlight = false
 
-    // Mesh session (rendered by ClipboardFragment) -----------------------------------------
+    // Mesh session (rendered by ChatFragment) -----------------------------------------------
 
     // The persistent post-pairing channel to the (single) connected peer, plus what we need to
     // re-establish it.
@@ -76,55 +107,69 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
     // A dead session whose peer no longer passes the trust check: retrying can never succeed,
     // so it is left alone until the user re-pairs (which replaces it).
     private var meshTrustLostSession: MeshSession? = null
+    // Set by disconnectMeshSession(); blocks the reconnect loop from restarting until the user
+    // connects again (manually, or by accepting an incoming pairing). Cleared whenever a session
+    // actually attaches, so a later real drop still reconnects normally.
+    private var userDisconnected = false
+    // When the current/most recent session was attached, so the reconnect loop can tell a quick
+    // flap (reset nothing — keep escalating) from a session that actually ran for a while (reset
+    // backoff — this is a fresh problem). See ReconnectPolicy.FLAP_RESET_THRESHOLD_MS.
+    private var meshSessionAttachedAt: Long = 0L
 
-    internal var sessionStatus: String = "Not connected"
-        private set
+    // Device page --------------------------------------------------------------------------
 
-    // Clipboard ------------------------------------------------------------------------------
-
-    private lateinit var clipboardWatcher: ClipboardWatcher
-
-    private sealed class HistoryOp {
-        class Add(val entry: ClipboardEntry, val pushToPeer: Boolean) : HistoryOp()
-        class Load(val onLoaded: (List<ClipboardEntry>) -> Unit) : HistoryOp()
+    /** A device's actual current link state, shown as [DeviceFragment]'s status stripe — not the
+     * same as the "Состояние" column on Devices (that shows Connecting too; this doesn't, since
+     * a device page is only reachable for an already-paired device). */
+    internal enum class ConnectionStatus(val colorRes: Int, val label: String) {
+        CONNECTED(R.color.conn_connected, "connected"),
+        DISCONNECTED(R.color.conn_disconnected, "disconnect"),
+        UNPAIRED(R.color.conn_unpaired, "unpaired"),
+        OFFLINE(R.color.conn_offline, "offline")
     }
 
-    // Single consumer: history writes and loads are applied strictly in arrival order, which
-    // keeps received clips in order and lets a load see exactly the writes queued before it.
-    private val historyOps = Channel<HistoryOp>(Channel.UNLIMITED)
+    internal fun connectionStatusFor(uuid: String): ConnectionStatus {
+        val row = deviceRows.firstOrNull { it.uuid == uuid } ?: return ConnectionStatus.UNPAIRED
+        return when {
+            !row.isPaired -> ConnectionStatus.UNPAIRED
+            row.isConnectedNow -> ConnectionStatus.CONNECTED
+            row.isOnline -> ConnectionStatus.DISCONNECTED
+            else -> ConnectionStatus.OFFLINE
+        }
+    }
 
-    /** A local clip to push, bound to the session (and peer) that was current when it was copied. */
-    private class OutgoingPush(val session: MeshSession, val peerUuid: String?, val message: ClipboardPush)
+    /** Opens a paired device's page (raw/design/2.jpg) — plain navigation, replacing whatever is
+     * currently shown. Only one device page is ever open; see [openDevicesPage] to go back. */
+    internal fun openDevicePage(uuid: String, name: String) = showFragment(DeviceFragment.newInstance(uuid, name))
 
-    // Network sends live on their own single consumer, decoupled from [historyOps]: a send that
-    // blocks on the socket (half-open connection, full send buffer) must never stall history
-    // persistence or the Clipboard tab. Single consumer keeps pushes going out in copy order.
-    private val outgoingPushes = Channel<OutgoingPush>(Channel.UNLIMITED)
+    internal fun openDevicesPage() = showFragment(DevicesFragment())
+
+    // Chat -------------------------------------------------------------------------------------
+
+    internal val selfDeviceUuid: String? get() = selfUuid
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        DebugLog.init(this)
 
         discovery = MeshDiscovery(this)
-        clipboardWatcher = ClipboardWatcher(this)
-        clipboardWatcher.onTextCopied = ::onLocalTextCopied
-        clipboardWatcher.start()
-        lifecycleScope.launch { runHistoryConsumer() }
-        lifecycleScope.launch { runPushSender() }
-
-        val tabLayout = findViewById<TabLayout>(R.id.tabLayout)
-        if (savedInstanceState == null) {
-            showFragment(DevicesFragment())
-        } else if (supportFragmentManager.findFragmentById(R.id.fragmentContainer) is ClipboardFragment) {
-            tabLayout.getTabAt(1)?.select() // restored fragment: keep the tab strip in sync
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
-            override fun onTabSelected(tab: TabLayout.Tab) {
-                showFragment(if (tab.position == 0) DevicesFragment() else ClipboardFragment())
+
+        openDevicesPage()
+        onBackPressedDispatcher.addCallback(this) {
+            // A device page's own "back" target is the device list, not closing the app.
+            if (deviceFragment() != null) openDevicesPage() else {
+                isEnabled = false
+                onBackPressedDispatcher.onBackPressed()
+                isEnabled = true
             }
-            override fun onTabUnselected(tab: TabLayout.Tab) {}
-            override fun onTabReselected(tab: TabLayout.Tab) {}
-        })
+        }
 
         lifecycleScope.launch {
             setStatus("Preparing identity…")
@@ -146,8 +191,7 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
             selfUuid = uuid
             listener = l
             setStatus("")
-            identityReady = true
-            devicesFragment()?.renderConnectEnabled()
+            rebuildDeviceRows()
             startDiscovery()
 
             // Listen for incoming pairing for the Activity's lifetime: one connection at a
@@ -160,13 +204,11 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
 
     override fun onDestroy() {
         super.onDestroy()
-        clipboardWatcher.stop()
         listener?.close() // unblocks accept(); the loop exits
         discovery.stop()
-        historyOps.close()
-        outgoingPushes.close()
         meshSession?.let(::closeInBackground)
         meshSession = null
+        MeshConnectionService.stop(this)
     }
 
     private fun showFragment(fragment: Fragment) {
@@ -178,22 +220,22 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
     private fun devicesFragment() =
         supportFragmentManager.findFragmentById(R.id.fragmentContainer) as? DevicesFragment
 
-    private fun clipboardFragment() =
-        supportFragmentManager.findFragmentById(R.id.fragmentContainer) as? ClipboardFragment
+    private fun deviceFragment() =
+        supportFragmentManager.findFragmentById(R.id.fragmentContainer) as? DeviceFragment
+
+    /** Reloads the currently-visible chat section if its device page is showing [peerUuid]. A
+     * no-op otherwise — that page's chat section reloads fresh the next time it's shown. */
+    private fun notifyChatChanged(peerUuid: String) {
+        deviceFragment()?.let { if (it.peerUuid == peerUuid) it.chatChild()?.reloadFromDb() }
+    }
 
     private fun setStatus(text: String) {
         statusMessage = text
         devicesFragment()?.renderStatus()
     }
 
-    private fun setSessionStatus(text: String) {
-        sessionStatus = text
-        clipboardFragment()?.renderSessionStatus()
-    }
-
     private fun setPairingInFlight(value: Boolean) {
         pairingInFlight = value
-        devicesFragment()?.renderConnectEnabled()
     }
 
     // Discovery ------------------------------------------------------------------------------
@@ -224,16 +266,51 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
         if (device.uuid == selfUuid) return // our own announcement
         val index = devices.indexOfFirst { it.uuid == device.uuid }
         if (index >= 0) devices[index] = device else devices.add(device)
-        refreshList()
+        rebuildDeviceRows()
     }
 
     private fun onDeviceLost(uuid: String) {
-        if (devices.removeAll { it.uuid == uuid }) refreshList()
+        if (devices.removeAll { it.uuid == uuid }) rebuildDeviceRows()
     }
 
-    private fun refreshList() {
-        if (devices.none { it.uuid == selectedUuid }) selectedUuid = null
-        devicesFragment()?.renderDeviceList()
+    /**
+     * Rebuilds [deviceRows] from the paired-device store (every paired device, online or not)
+     * merged with [devices] (currently mDNS-visible, paired or not) plus current session state.
+     * Mirrors Windows' MainWindow.xaml.cs RebuildDeviceRows. Called whenever any input changes:
+     * discovery, pairing, session state.
+     */
+    private fun rebuildDeviceRows() {
+        lifecycleScope.launch {
+            val paired = try { dao().all() } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emptyList()
+            }
+            val pairedByUuid = paired.associateBy { it.uuid }
+            val uuids = mutableSetOf<String>()
+            uuids.addAll(pairedByUuid.keys)
+            uuids.addAll(devices.map { it.uuid })
+            selfUuid?.let { uuids.remove(it) }
+
+            val rows = uuids.map { uuid ->
+                val discovered = devices.firstOrNull { it.uuid == uuid }
+                val record = pairedByUuid[uuid]
+                DeviceRow(
+                    uuid = uuid,
+                    name = record?.name ?: discovered?.name ?: uuid,
+                    isOnline = discovered != null,
+                    isPaired = record != null,
+                    isConnectedNow = record != null && meshPeerUuid == uuid && meshSession != null,
+                    isConnecting = connectingUuid == uuid,
+                    ipAddress = discovered?.ipAddress ?: record?.lastIp ?: "",
+                    port = discovered?.port ?: 0
+                )
+            }.sortedBy { it.name.lowercase() }
+
+            deviceRows = rows
+            devicesFragment()?.renderDeviceList()
+            deviceFragment()?.refreshConnectionState()
+        }
     }
 
     /** The peer's listening endpoint as currently advertised over mDNS, if seen. */
@@ -246,82 +323,136 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
         val uuid = selfUuid ?: return
         if (pairingInFlight) return // busy: the loop closes this session; peer sees a failure
         setPairingInFlight(true)
+        pendingIncomingSession = session
         try {
             val outcome = session.run(uuid, selfName, dao(), this)
             val peerName = outcome.peerName ?: session.peerIp
-            // A trusted reconnect from the peer we already have a mesh session with is the
-            // peer's background reconnect replacing that session: report it quietly, the same
-            // way our own background reconnect does, instead of a toast on every network blip.
-            val isBackgroundReconnect = outcome.result == PairingResult.RECONNECTED &&
-                meshSession != null && meshPeerUuid == outcome.peerUuid
-            if (isBackgroundReconnect) setStatus("Reconnected to $peerName (trusted).")
-            else showOutcome(outcome, peerName)
+            // PairingSession.run only returns RECONNECTED after the peer's certificate already
+            // matched our trust record, so it is always a background reconnect of an
+            // already-paired device, never a new pairing. Report it quietly (status text only),
+            // the same way our own outgoing background reconnect does, instead of a toast on
+            // every network blip. (Previously this also required meshSession/meshPeerUuid to
+            // already point at this peer, which missed the reconnect right after an app restart
+            // — and any other case where that bookkeeping lagged behind reality — showing the
+            // toast every single time the peer reconnected in a loop.)
+            setStatus(when (outcome.result) {
+                PairingResult.PAIRED -> "Paired with $peerName."
+                PairingResult.RECONNECTED -> "Reconnected to $peerName (trusted)."
+                PairingResult.CONNECTION_FAILED -> "Connection failed: ${outcome.detail}"
+                PairingResult.PAIRING_FAILED -> "Pairing failed: ${outcome.detail}"
+            })
             if (outcome.result == PairingResult.PAIRED || outcome.result == PairingResult.RECONNECTED) {
                 val peerUuid = outcome.peerUuid!!
                 // The accepted socket came from the peer's ephemeral port, so its listening
                 // endpoint (needed to reconnect later) comes from mDNS when we have it.
                 val endpoint = resolvePeerEndpoint(peerUuid, session.peerIp to 0)
                 attachMeshSession(session, peerUuid, peerName, endpoint)
+                // Only a first-time pairing auto-opens a tab — a silent background/manual
+                // reconnect to an already-paired device must not pop UI on its own.
+                if (outcome.result == PairingResult.PAIRED) openDevicePage(peerUuid, peerName)
             }
         } finally {
             setPairingInFlight(false)
+            pendingIncomingSession = null
+            pendingPinDialog?.dismiss()
+            pendingPinDialog = null
+            rebuildDeviceRows()
         }
     }
 
-    internal fun connectToSelected() {
-        val target = devices.firstOrNull { it.uuid == selectedUuid } ?: return
-        connectTo(target)
-    }
+    /** Pair button on an unpaired row: first-time pairing, dialer side, asymmetric PIN entry. */
+    internal fun pairDevice(uuid: String) = connectOrPair(uuid, isFirstTimePair = true)
 
-    private fun connectTo(target: DiscoveredDevice) {
+    /** Connect button on an already-paired row: manual trusted reconnect, listener gets a
+     * lightweight "allow?" prompt (see [confirmReconnect]), no PIN. */
+    internal fun connectDevice(uuid: String) = connectOrPair(uuid, isFirstTimePair = false)
+
+    /**
+     * Shared by [pairDevice] and [connectDevice]: both are the dialer side of a manual,
+     * human-initiated Connect (`isManualConnect = true`), which is what makes the already-paired
+     * case prompt the listener at all — background reconnects never do. Mirrors Windows'
+     * ConnectOrPairAsync.
+     */
+    private fun connectOrPair(uuid: String, isFirstTimePair: Boolean) {
         val id = identity ?: return
-        val uuid = selfUuid ?: return
+        val self = selfUuid ?: return
         if (pairingInFlight) return
+        val row = deviceRows.firstOrNull { it.uuid == uuid } ?: return
+        if (row.port <= 0) return // not currently reachable over mDNS
         setPairingInFlight(true)
+        connectingUuid = uuid
+        rebuildDeviceRows()
         lifecycleScope.launch {
+            if (isFirstTimePair) {
+                // Nothing to show yet: the dialer never sees the PIN until the listener
+                // approves (see enterPin below), which replaces this placeholder.
+                pendingConnectingDialog = PinConfirmDialog.showConnecting(this@MainActivity, row.name) {
+                    pendingDialerSession?.close()
+                }
+            }
             try {
                 val session = try {
-                    PairingSession.connect(id, target.ipAddress, target.port)
+                    PairingSession.connect(id, row.ipAddress, row.port)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    showOutcome(PairingOutcome(PairingResult.CONNECTION_FAILED, target.uuid, target.name,
-                        e.message ?: e.javaClass.simpleName), target.name)
+                    setStatus("Connection failed: ${e.message ?: e.javaClass.simpleName}")
                     return@launch
                 }
+                pendingDialerSession = session
                 // On success the transport is detached into a MeshSession, which makes use{}'s
                 // close a no-op; on every other outcome it closes the socket as before.
                 session.use {
-                    val outcome = it.run(uuid, selfName, dao(), this@MainActivity)
-                    val peerName = outcome.peerName ?: target.name
-                    showOutcome(outcome, peerName)
-                    if (outcome.result == PairingResult.PAIRED || outcome.result == PairingResult.RECONNECTED) {
-                        attachMeshSession(it, outcome.peerUuid!!, peerName, target.ipAddress to target.port)
+                    val outcome = it.run(self, selfName, dao(), this@MainActivity, isManualConnect = true)
+                    val peerName = outcome.peerName ?: row.name
+                    // No success dialog by design — the row's own Connected/greyed state is the
+                    // confirmation; only failures get a status-line message.
+                    when (outcome.result) {
+                        PairingResult.PAIRED, PairingResult.RECONNECTED -> {
+                            attachMeshSession(it, outcome.peerUuid!!, peerName, row.ipAddress to row.port)
+                            if (outcome.result == PairingResult.PAIRED) openDevicePage(outcome.peerUuid, peerName)
+                        }
+                        PairingResult.CONNECTION_FAILED -> setStatus("Connection failed: ${outcome.detail}")
+                        PairingResult.PAIRING_FAILED -> setStatus("Pairing failed: ${outcome.detail}")
                     }
                 }
             } finally {
+                pendingConnectingDialog?.dismiss()
+                pendingConnectingDialog = null
+                pendingDialerSession = null
+                connectingUuid = null
                 setPairingInFlight(false)
+                rebuildDeviceRows()
             }
+        }
+    }
+
+    /** ✕ button on a paired row: removes the local trust record only — no network notification
+     * to the peer (see PairedDeviceDao.deleteByUuid). Disconnects first if currently connected
+     * to this device. */
+    internal fun unpairDevice(uuid: String) {
+        val row = deviceRows.firstOrNull { it.uuid == uuid } ?: return
+        lifecycleScope.launch {
+            val confirmed = PinConfirmDialog.show(
+                this@MainActivity, "Unpair", "Remove pairing with ${row.name}?", "Unpair", "Cancel")
+            if (!confirmed) return@launch
+            if (meshPeerUuid == uuid) disconnectMeshSession()
+            try {
+                dao().deleteByUuid(uuid)
+                chatMessageDao().deleteForPeer(uuid)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Best effort; the row simply stays paired if this failed.
+            }
+            // Nothing meaningful left to show for this device; back to the list, a re-pair
+            // opens its page fresh.
+            if (deviceFragment()?.peerUuid == uuid) openDevicesPage()
+            rebuildDeviceRows()
         }
     }
 
     private fun dao() = MeshDatabase.getInstance(this).pairedDeviceDao()
-
-    /**
-     * "Connection failed" = TCP/TLS/transport problem (incl. the 10 s timeout);
-     * "Pairing failed" = connected, but the PIN was rejected/declined/timed out.
-     * Used for user-visible pairing results only; background reconnects just update status.
-     */
-    private fun showOutcome(outcome: PairingOutcome, peerName: String) {
-        val text = when (outcome.result) {
-            PairingResult.PAIRED -> "Paired with $peerName."
-            PairingResult.RECONNECTED -> "Reconnected to $peerName (trusted)."
-            PairingResult.CONNECTION_FAILED -> "Connection failed: ${outcome.detail}"
-            PairingResult.PAIRING_FAILED -> "Pairing failed."
-        }
-        setStatus(text)
-        Toast.makeText(this, text, Toast.LENGTH_LONG).show()
-    }
 
     // Mesh session lifecycle -----------------------------------------------------------------
 
@@ -329,6 +460,44 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
 
     /** Name of the peer the current mesh session is with (as reported in its last handshake). */
     internal fun peerDisplayName(): String = meshPeerName ?: meshPeerUuid ?: "Unknown device"
+
+    /**
+     * Closes the current mesh session on purpose and stops the reconnect loop. No further
+     * background reconnect happens for this peer until the user reconnects (Connect, or an
+     * incoming trusted-reconnect from the peer).
+     */
+    internal fun disconnectMeshSession() {
+        val session = meshSession ?: return
+        userDisconnected = true
+        meshSession = null
+        meshReconnectTarget = null
+        setStatus("Not connected")
+        rebuildDeviceRows()
+        MeshConnectionService.stop(this)
+        lifecycleScope.launch {
+            // Best-effort: tells the peer this is intentional, so its own reconnect loop stops
+            // too instead of dialing back in later and silently undoing the disconnect. If this
+            // never arrives (peer already gone), the peer's own idle timeout notices the drop
+            // regardless.
+            withContext(Dispatchers.IO) {
+                try { withTimeout(2_000) { session.send(Goodbye) } } catch (e: Exception) { /* best effort */ }
+                session.close() // cancels its loops without firing onStateChanged
+            }
+        }
+    }
+
+    /** The peer disconnected on purpose (sent [Goodbye]): stop trying to reconnect to them
+     * until the user reconnects, same as our own disconnectMeshSession(). */
+    private fun onPeerGoodbye(session: MeshSession) {
+        if (session !== meshSession) return // a replaced/closed session
+        userDisconnected = true
+        meshSession = null
+        meshReconnectTarget = null
+        setStatus("Disconnected by $meshPeerName")
+        rebuildDeviceRows()
+        MeshConnectionService.stop(this)
+        session.close()
+    }
 
     /**
      * Takes over [session]'s authenticated transport as the new [MeshSession], replacing (and
@@ -352,7 +521,7 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
         // has assigned it below, before its first suspension point.
         lateinit var current: MeshSession
         current = MeshSession.fromTransport(transport, peerUuid, peerEndpoint.first, peerEndpoint.second,
-            onMessageReceived = { message -> onMeshMessageReceived(message, peerName) },
+            onMessageReceived = { message -> onMeshMessageReceived(message, peerUuid, peerName, current) },
             onStateChanged = { state ->
                 // lifecycleScope: dropped once the Activity is destroyed.
                 lifecycleScope.launch(Dispatchers.Main) { onMeshSessionStateChanged(current, state) }
@@ -362,7 +531,19 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
         meshPeerName = peerName
         meshPeerEndpoint = peerEndpoint
         meshTrustLostSession = null // only ever refers to a session this one has just replaced
-        setSessionStatus("Connected to $peerName")
+        userDisconnected = false // a live session now exists; a later drop should reconnect again
+        meshSessionAttachedAt = System.currentTimeMillis()
+        setStatus("Connected to $peerName")
+        rebuildDeviceRows()
+        // Keeps this process at foreground importance so backgrounding the app (MIUI and
+        // other aggressive battery managers especially) doesn't freeze it or cut its network
+        // access mid-session.
+        MeshConnectionService.start(this, peerName)
+
+        val syncEntries = loadChatHistory(peerUuid).map { ChatSyncEntry(it.msgId, it.senderUuid, it.timestamp, it.text) }
+        withContext(Dispatchers.IO) {
+            try { current.send(ChatHistorySync(syncEntries)) } catch (e: Exception) { /* best effort */ }
+        }
 
         if (previous == null) return
         // Close first so the old session cannot accept anything more, then drain (which waits
@@ -384,11 +565,12 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
         if (session !== meshSession) return // a replaced/closed session
         if (session === meshTrustLostSession) return // keep "Re-pairing required"
         val name = peerDisplayName()
-        setSessionStatus(when (state) {
+        setStatus(when (state) {
             MeshSessionState.CONNECTED -> "Connected to $name"
             MeshSessionState.RECONNECTING -> "Reconnecting to $name..."
             MeshSessionState.DISCONNECTED -> "Disconnected from $name"
         })
+        rebuildDeviceRows()
         if (state == MeshSessionState.DISCONNECTED) ensureMeshReconnect(session)
     }
 
@@ -398,6 +580,7 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
      * it is retargeted to this session and picks it up when it wakes.
      */
     private fun ensureMeshReconnect(session: MeshSession) {
+        if (userDisconnected) return // the user closed this on purpose; wait for them to reconnect
         val loopRunning = meshReconnectTarget != null
         meshReconnectTarget = session
         if (!loopRunning) lifecycleScope.launch { runMeshReconnectLoop() }
@@ -405,7 +588,8 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
 
     /** A current session that is down and still worth reconnecting. */
     private fun needsMeshReconnect(session: MeshSession?): Boolean =
-        session != null && session.state != MeshSessionState.CONNECTED && session !== meshTrustLostSession
+        session != null && session.state != MeshSessionState.CONNECTED &&
+            session !== meshTrustLostSession && !userDisconnected
 
     /**
      * UI-level reconnect orchestration (mirrors Windows' RunMeshReconnectLoopAsync).
@@ -430,7 +614,14 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
             while (true) {
                 if (target !== meshReconnectTarget) {
                     target = meshReconnectTarget // retargeted by a newer disconnect
-                    attempt = 0
+                    // Only treat this as a fresh problem (reset backoff) if the session we're
+                    // now chasing had actually been up for a while. A session that flapped —
+                    // connected and died again within FLAP_RESET_THRESHOLD_MS — is the same
+                    // ongoing episode; keep escalating, or a flaky link causes a 1 s-interval
+                    // reconnect storm that never slows down.
+                    if (System.currentTimeMillis() - meshSessionAttachedAt > ReconnectPolicy.FLAP_RESET_THRESHOLD_MS) {
+                        attempt = 0
+                    }
                 }
                 if (meshSession !== target) {
                     // Replaced while we were asleep or attempting. Adopt the replacement if it is
@@ -438,7 +629,9 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
                     if (!needsMeshReconnect(meshSession)) return
                     target = meshSession
                     meshReconnectTarget = target
-                    attempt = 0
+                    if (System.currentTimeMillis() - meshSessionAttachedAt > ReconnectPolicy.FLAP_RESET_THRESHOLD_MS) {
+                        attempt = 0
+                    }
                 }
                 if (!needsMeshReconnect(target)) return
 
@@ -471,10 +664,10 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
                     // or either side removed the pairing). No amount of retrying fixes that, so
                     // this is the one background outcome worth interrupting the user for.
                     meshTrustLostSession = target
-                    setSessionStatus("Re-pairing required with $peerName")
                     val text = "$peerName is no longer trusted (certificate changed or pairing removed). " +
-                        "Select it and press Connect to pair again."
+                        "Press Connect to pair again."
                     setStatus(text)
+                    rebuildDeviceRows()
                     Toast.makeText(this, text, Toast.LENGTH_LONG).show()
                 }
                 // RECONNECTED / TRUST_LOST / FAILED: the checks at the top decide whether to stop.
@@ -511,6 +704,11 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
         session.use {
             try {
                 it.exchangeIdentity(uuid, selfName)
+                // Keeps the wire protocol in sync with PairingSession.run, which reads this same
+                // step right after exchangeIdentity. This path drives the protocol manually (it
+                // never calls run()) because a background reconnect must stay completely silent
+                // — false here means "not a manual Connect", so the listener never prompts.
+                it.exchangeManualIntent(isManualConnect = false)
                 // Someone else now on that IP:port (e.g. DHCP reuse): not our peer, keep trying.
                 if (it.peerUuid != peerUuid) return ReconnectAttemptResult.FAILED
                 // Our peer, but its certificate no longer matches our record (or the record is gone).
@@ -547,96 +745,161 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
         Thread({ session.close() }, "mesh-session-close").apply { isDaemon = true }.start()
     }
 
-    // Clipboard ------------------------------------------------------------------------------
+    // Chat -------------------------------------------------------------------------------------
 
-    internal fun clipboardHistoryDao(): ClipboardHistoryDao =
-        MeshDatabase.getInstance(this).clipboardHistoryDao()
+    private fun chatMessageDao(): ChatMessageDao = MeshDatabase.getInstance(this).chatMessageDao()
 
-    /** Delivers the stored history (newest first) on Main, after every write queued before it. */
-    internal fun loadClipboardHistory(onLoaded: (List<ClipboardEntry>) -> Unit) {
-        historyOps.trySend(HistoryOp.Load(onLoaded))
+    /** True while [peerUuid] is the one single peer currently connected — tabs are just views
+     * (see the device-tabs design: only Connect on the Devices tab changes this). */
+    internal fun isActivePeer(peerUuid: String): Boolean = meshPeerUuid == peerUuid && meshSession != null
+
+    internal suspend fun loadChatHistory(peerUuid: String): List<ChatMessage> = try {
+        chatMessageDao().getAllForPeer(peerUuid)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        setStatus("Could not load chat history: ${e.message}")
+        emptyList()
+    }
+
+    /** Send button: stores the message locally, re-renders, then pushes it to the peer. Only
+     * called while [peerUuid] is active — [ChatFragment] disables Send otherwise. */
+    internal fun sendChatMessage(peerUuid: String, text: String) {
+        if (text.isEmpty() || text.length > MAX_CHAT_TEXT_LENGTH) return
+        val session = meshSession?.takeIf { meshPeerUuid == peerUuid } ?: return
+        val selfId = selfUuid ?: return
+        lifecycleScope.launch {
+            val id = UUID.randomUUID().toString()
+            val timestamp = System.currentTimeMillis()
+            val message = ChatMessage(
+                msgId = id, peerUuid = peerUuid, senderUuid = selfId, senderLabel = selfName,
+                text = text, timestamp = timestamp)
+            try {
+                chatMessageDao().insertAndEvict(message)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setStatus("Could not save chat message: ${e.message}")
+                return@launch
+            }
+            notifyChatChanged(peerUuid)
+            withContext(Dispatchers.IO) { session.send(ChatSend(id, timestamp, text)) }
+        }
+    }
+
+    /** Edits one of our own already-sent messages. Always applied locally; also sent live to the
+     * peer if they're the one currently connected (an edit made while that peer is offline never
+     * gets retried/queued). */
+    internal fun editChatMessage(peerUuid: String, msgId: String, newText: String) {
+        if (newText.isEmpty() || newText.length > MAX_CHAT_TEXT_LENGTH) return
+        lifecycleScope.launch {
+            try {
+                chatMessageDao().updateText(peerUuid, msgId, newText)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setStatus("Could not edit chat message: ${e.message}")
+                return@launch
+            }
+            notifyChatChanged(peerUuid)
+            val session = meshSession?.takeIf { meshPeerUuid == peerUuid } ?: return@launch
+            withContext(Dispatchers.IO) { session.send(ChatEdit(msgId, newText)) }
+        }
+    }
+
+    /** Deletes one of our own already-sent messages. Same best-effort delivery caveat as
+     * [editChatMessage]. */
+    internal fun deleteChatMessage(peerUuid: String, msgId: String) {
+        lifecycleScope.launch {
+            try {
+                chatMessageDao().deleteMessage(peerUuid, msgId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setStatus("Could not delete chat message: ${e.message}")
+                return@launch
+            }
+            notifyChatChanged(peerUuid)
+            val session = meshSession?.takeIf { meshPeerUuid == peerUuid } ?: return@launch
+            withContext(Dispatchers.IO) { session.send(ChatDelete(msgId)) }
+        }
     }
 
     internal fun copyTextToClipboard(text: String) {
-        // Our own write must not come back through the watcher and get re-pushed.
-        clipboardWatcher.suppressNextChange(CLIPBOARD_SELF_WRITE_SUPPRESS_MS)
         getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("mesh", text))
     }
 
-    private fun onLocalTextCopied(text: String) {
-        // Called on Main by the ClipboardManager listener.
-        if (text.length > MAX_CLIPBOARD_TEXT_LENGTH) return
-        val entry = ClipboardEntry(text = text, source = "local", timestamp = System.currentTimeMillis())
-        historyOps.trySend(HistoryOp.Add(entry, pushToPeer = true))
-    }
-
-    private fun onMeshMessageReceived(message: MeshMessage, peerName: String) {
-        // Called on MeshSession's read loop (IO thread); the channel is thread-safe.
-        if (message !is ClipboardPush) return
-        if (message.text.length > MAX_CLIPBOARD_TEXT_LENGTH) return
-        // Sort/evict by LOCAL receipt time, not the sender's clock (message.timestamp is
-        // informational-only metadata, carried as-is in the wire message): clock skew between
-        // devices must not cause a just-arrived clip to be evicted early, or a stale clip to
-        // stick at the top of the list.
-        val entry = ClipboardEntry(text = message.text, source = peerName, timestamp = System.currentTimeMillis())
-        historyOps.trySend(HistoryOp.Add(entry, pushToPeer = false))
-    }
-
-    private suspend fun runHistoryConsumer() {
-        val historyDao = clipboardHistoryDao()
-        for (op in historyOps) {
-            when (op) {
-                is HistoryOp.Load -> {
-                    val entries = try {
-                        historyDao.getAll()
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        setStatus("Could not load clipboard history: ${e.message}")
-                        emptyList()
-                    }
-                    op.onLoaded(entries)
-                }
-                is HistoryOp.Add -> {
-                    try {
-                        historyDao.insertAndEvict(op.entry)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        setStatus("Could not save clipboard history: ${e.message}")
-                        continue
-                    }
-                    clipboardFragment()?.onHistoryEntryAdded(op.entry)
-                    if (op.pushToPeer) {
-                        // Hand off to runPushSender: persistence above never waits on the network.
-                        val session = meshSession ?: continue
-                        outgoingPushes.trySend(
-                            OutgoingPush(session, meshPeerUuid, ClipboardPush(op.entry.timestamp, op.entry.text)))
-                    }
-                }
-            }
+    private fun onMeshMessageReceived(message: MeshMessage, peerUuid: String, peerName: String, session: MeshSession) {
+        // Called on MeshSession's read loop (IO thread); lifecycleScope.launch marshals to Main.
+        when (message) {
+            is Goodbye -> lifecycleScope.launch(Dispatchers.Main) { onPeerGoodbye(session) }
+            is ChatSend -> lifecycleScope.launch(Dispatchers.Main) { onChatSendReceived(message, peerUuid, peerName) }
+            is ChatHistorySync -> lifecycleScope.launch(Dispatchers.Main) { onChatHistorySyncReceived(message, peerUuid) }
+            is ChatEdit -> lifecycleScope.launch(Dispatchers.Main) { onChatEditReceived(message, peerUuid) }
+            is ChatDelete -> lifecycleScope.launch(Dispatchers.Main) { onChatDeleteReceived(message, peerUuid) }
+            else -> {}
         }
     }
 
-    /**
-     * Sends queued local clips to the peer, one at a time in copy order. Runs on Main between
-     * sends so it can read [meshSession] consistently; the send itself (socket I/O) runs on IO.
-     * While disconnected, send() queues inside the session and attachMeshSession drains and
-     * re-sends it on reconnect.
-     */
-    private suspend fun runPushSender() {
-        for (push in outgoingPushes) {
-            // If the session this clip was bound to has since been replaced by a reconnect to
-            // the same peer, use the replacement (the old one is closed and already drained).
-            // Never redirect to a different peer — same rule as attachMeshSession.
-            val current = meshSession
-            val session = when {
-                current == null || current === push.session -> push.session
-                meshPeerUuid == push.peerUuid -> current
-                else -> continue
-            }
-            withContext(Dispatchers.IO) { session.send(push.message) }
+    private suspend fun onChatSendReceived(message: ChatSend, peerUuid: String, peerName: String) {
+        if (message.text.length > MAX_CHAT_TEXT_LENGTH) return
+        val entry = ChatMessage(
+            msgId = message.id, peerUuid = peerUuid, senderUuid = peerUuid, senderLabel = peerName,
+            text = message.text, timestamp = message.timestamp)
+        val inserted = try {
+            chatMessageDao().insertAndEvict(entry)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            setStatus("Could not save chat message: ${e.message}")
+            return
         }
+        if (inserted) notifyChatChanged(peerUuid)
+    }
+
+    private suspend fun onChatHistorySyncReceived(message: ChatHistorySync, peerUuid: String) {
+        var anyInserted = false
+        val dao = chatMessageDao()
+        for (entry in message.entries) {
+            if (entry.text.length > MAX_CHAT_TEXT_LENGTH) continue
+            val senderLabel = if (entry.senderUuid == peerUuid) peerDisplayName() else selfName
+            val chatEntry = ChatMessage(
+                msgId = entry.id, peerUuid = peerUuid, senderUuid = entry.senderUuid, senderLabel = senderLabel,
+                text = entry.text, timestamp = entry.timestamp)
+            try {
+                if (dao.insertAndEvict(chatEntry)) anyInserted = true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setStatus("Could not save chat history: ${e.message}")
+            }
+        }
+        if (anyInserted) notifyChatChanged(peerUuid)
+    }
+
+    private suspend fun onChatEditReceived(message: ChatEdit, peerUuid: String) {
+        if (message.text.length > MAX_CHAT_TEXT_LENGTH) return
+        try {
+            chatMessageDao().updateText(peerUuid, message.id, message.text)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            setStatus("Could not save chat edit: ${e.message}")
+            return
+        }
+        notifyChatChanged(peerUuid)
+    }
+
+    private suspend fun onChatDeleteReceived(message: ChatDelete, peerUuid: String) {
+        try {
+            chatMessageDao().deleteMessage(peerUuid, message.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            setStatus("Could not save chat delete: ${e.message}")
+            return
+        }
+        notifyChatChanged(peerUuid)
     }
 
     // PairingPrompt ---------------------------------------------------------------------------
@@ -645,5 +908,20 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
         PinConfirmDialog.confirmCertificateChanged(this, peerName)
 
     override suspend fun confirmPin(peerName: String, pin: String): Boolean =
-        PinConfirmDialog.confirmPin(this, peerName, pin)
+        PinConfirmDialog.confirmPin(
+            this, peerName, pin,
+            onShown = { pendingPinDialog = it },
+            onCancelWhileConnecting = { pendingIncomingSession?.close() })
+
+    // Dialer side, first-time pairing only: the listener has just approved, so swap the
+    // "Connecting..." placeholder for the real text-entry prompt.
+    override suspend fun enterPin(peerName: String): String? {
+        pendingConnectingDialog?.dismiss()
+        pendingConnectingDialog = null
+        return PinConfirmDialog.enterPin(this, peerName)
+    }
+
+    // Listener side, already-trusted peer, manual Connect only: lightweight "allow?" with no PIN.
+    override suspend fun confirmReconnect(peerName: String): Boolean =
+        PinConfirmDialog.confirmReconnect(this, peerName)
 }

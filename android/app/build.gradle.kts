@@ -16,6 +16,23 @@ android {
         versionName = "0.1"
     }
 
+    // Checked into the repo on purpose: Android refuses to install an update signed by a
+    // different certificate than what's already on the device ("App not installed" /
+    // INSTALL_FAILED_UPDATE_INCOMPATIBLE), forcing an uninstall first. The default debug
+    // signing config instead auto-generates a random keystore per machine, so a build from one
+    // machine can never update an install from another. Pinning this one fixed debug keystore
+    // for every debug build — mine and yours — means `adb install -r app-debug.apk` (or tapping
+    // the APK again to "Update") always works, no reinstall needed. Debug-only: never used for
+    // release signing, and the usual "debug keystore" risk profile (not secret, not meant to be).
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false

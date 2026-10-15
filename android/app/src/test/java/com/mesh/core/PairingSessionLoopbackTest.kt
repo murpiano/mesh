@@ -24,12 +24,21 @@ class FakeDao : PairedDeviceDao {
     override suspend fun upsert(device: PairedDevice) = synchronized(rows) { rows[device.uuid] = device }
     override suspend fun findByUuid(uuid: String): PairedDevice? = synchronized(rows) { rows[uuid] }
     override suspend fun all(): List<PairedDevice> = synchronized(rows) { rows.values.toList() }
+    override suspend fun deleteByUuid(uuid: String) = synchronized(rows) { rows.remove(uuid); Unit }
 }
 
+/**
+ * Plays either pairing role. As a listener prompt ([confirmPin]), [pinAnswer] is the "Match"/
+ * "Not matching" verdict. As a dialer prompt ([enterPin]), there is no PIN to compare visually —
+ * [pinAnswer] instead means "type the correct code", which requires [session] (the dialer's own
+ * [PairingSession]) so this can read back the same value [PairingSession.computePin] will check
+ * against; false means "type something wrong" (modeled as null — doesn't match).
+ */
 class FakePrompt(
     private val pinAnswer: Boolean,
     private val certChangedAnswer: Boolean = true,
-    private val hang: Boolean = false
+    private val hang: Boolean = false,
+    private val session: PairingSession? = null
 ) : PairingPrompt {
     @Volatile var shownPin: String? = null
     @Volatile var certChangedShown = false
@@ -46,6 +55,13 @@ class FakePrompt(
         if (hang) hangUntilCancelled()
         return pinAnswer
     }
+
+    override suspend fun enterPin(peerName: String): String? {
+        if (hang) hangUntilCancelled()
+        return if (pinAnswer) session?.computePin() else null
+    }
+
+    override suspend fun confirmReconnect(peerName: String): Boolean = pinAnswer
 
     private suspend fun hangUntilCancelled(): Nothing {
         try {
@@ -155,8 +171,8 @@ class PairingSessionLoopbackTest {
         val daoA = FakeDao()
         val daoB = FakeDao()
         val promptA = FakePrompt(true)
-        val promptB = FakePrompt(true)
         val (server, client) = connectPair(idA, idB)
+        val promptB = FakePrompt(true, session = client)
         server.use {
             client.use {
                 val results = listOf(
@@ -165,7 +181,6 @@ class PairingSessionLoopbackTest {
                 results.forEach { assertEquals(PairingResult.PAIRED, it.result) }
             }
         }
-        assertEquals(promptA.shownPin, promptB.shownPin)
         assertFalse(promptA.certChangedShown)
 
         val recA = daoA.all().single()
@@ -189,7 +204,7 @@ class PairingSessionLoopbackTest {
                 client.use {
                     val results = listOf(
                         async { server.run("uuid-a", "Alpha", daoA, FakePrompt(answerA)) },
-                        async { client.run("uuid-b", "Bravo", daoB, FakePrompt(answerB)) }).awaitAll()
+                        async { client.run("uuid-b", "Bravo", daoB, FakePrompt(answerB, session = client)) }).awaitAll()
                     results.forEach { assertEquals("$answerA/$answerB", PairingResult.PAIRING_FAILED, it.result) }
                 }
             }
@@ -221,24 +236,11 @@ class PairingSessionLoopbackTest {
         assertTrue(daoB.all().isEmpty())
     }
 
-    @Test
-    fun run_peerRejectsEarly_dismissesLocalDialog() = runBlocking {
-        val daoA = FakeDao()
-        val hangingPrompt = FakePrompt(true, hang = true)
-        val (server, client) = connectPair(idA, idB)
-        server.use {
-            client.use {
-                val results = withTimeout(15_000) {
-                    listOf(
-                        async { server.run("uuid-a", "Alpha", daoA, hangingPrompt) },
-                        async { client.run("uuid-b", "Bravo", FakeDao(), FakePrompt(false)) }).awaitAll()
-                }
-                results.forEach { assertEquals(PairingResult.PAIRING_FAILED, it.result) }
-            }
-        }
-        assertTrue(hangingPrompt.cancelled) // closed well before the 60 s budget
-        assertTrue(daoA.all().isEmpty())
-    }
+    // The old run_peerRejectsEarly_dismissesLocalDialog tested the symmetric race's "peer
+    // answers quickly, dismisses our hung dialog" path. The asymmetric protocol has no dialer-
+    // side equivalent (the dialer never answers until after the listener does), and the
+    // listener-side equivalent — a vanished peer dismissing our hung dialog — is already
+    // covered below by run_peerDisconnectsBeforeConfirming_isPairingFailed_noRecord.
 
     @Test
     fun run_peerDisconnectsBeforeConfirming_isPairingFailed_noRecord() = runBlocking {
@@ -247,6 +249,7 @@ class PairingSessionLoopbackTest {
         server.use {
             val serverRun = async { server.run("uuid-a", "Alpha", daoA, FakePrompt(true, hang = true)) }
             client.exchangeIdentity("uuid-b", "Bravo")
+            client.exchangeManualIntent(false)
             client.exchangeTrust(false)
             client.exchangeNonces()
             client.close() // vanish while A's PIN dialog is up
@@ -263,7 +266,7 @@ class PairingSessionLoopbackTest {
         s1.use { c1.use {
             listOf(
                 async { s1.run("uuid-a", "Alpha", daoA, FakePrompt(true)) },
-                async { c1.run("uuid-b", "Bravo", daoB, FakePrompt(true)) }).awaitAll()
+                async { c1.run("uuid-b", "Bravo", daoB, FakePrompt(true, session = c1)) }).awaitAll()
         } }
 
         // Roles swapped: A initiates, B is now the listener.
@@ -286,15 +289,15 @@ class PairingSessionLoopbackTest {
         val daoB = FakeDao()
         daoA.upsert(PairedDevice("uuid-b", "Bravo", IdentityStore.fingerprint(idB.first), "10.0.0.9", 1L))
         val promptA = FakePrompt(true)
-        val promptB = FakePrompt(true)
         val (server, client) = connectPair(idA, idB)
+        val promptB = FakePrompt(true, session = client)
         server.use { client.use {
             val results = listOf(
                 async { server.run("uuid-a", "Alpha", daoA, promptA) },
                 async { client.run("uuid-b", "Bravo", daoB, promptB) }).awaitAll()
             results.forEach { assertEquals(PairingResult.PAIRED, it.result) }
         } }
-        assertTrue(promptA.shownPin != null && promptB.shownPin != null)
+        assertTrue(promptA.shownPin != null)
         assertEquals(1, daoB.all().size)
     }
 
@@ -326,7 +329,7 @@ class PairingSessionLoopbackTest {
         server.use { client.use {
             val results = listOf(
                 async { server.run("uuid-a", "Alpha", daoA, promptA) },
-                async { client.run("uuid-b", "Bravo", FakeDao(), FakePrompt(true)) }).awaitAll()
+                async { client.run("uuid-b", "Bravo", FakeDao(), FakePrompt(true, session = client)) }).awaitAll()
             results.forEach { assertEquals(PairingResult.PAIRED, it.result) }
         } }
         assertTrue(promptA.certChangedShown)

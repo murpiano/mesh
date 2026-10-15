@@ -17,6 +17,16 @@ object ReconnectPolicy {
     const val PASSIVE_INTERVAL_MS = 45_000L
 
     /**
+     * A session that dies before living this long is "the same flapping episode" as whatever
+     * came before it, not a fresh problem: the reconnect loop must keep escalating backoff
+     * instead of resetting to the 1 s rung every time, or a peer that connects and immediately
+     * drops (bad Wi-Fi, a Doze/MIUI hiccup) causes an endless storm of 1 s reconnect attempts
+     * that never slows down. Below the heartbeat interval, so a session that received even one
+     * heartbeat counts as having actually worked for a while.
+     */
+    const val FLAP_RESET_THRESHOLD_MS = 15_000L
+
+    /**
      * True if this device is the one that dials. Must give the exact complement of what the
      * peer computes, so it compares the UUID strings exactly as they travel over the wire in
      * the pairing identity exchange (no case or format normalisation — Windows does none either):

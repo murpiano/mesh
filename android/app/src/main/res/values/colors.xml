@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark palette per raw/design/1.jpg + 2.jpg. The app is always dark (not DayNight) — see
+         AppTheme in themes.xml. -->
+    <color name="bg_screen">#FF18181A</color>
+    <color name="bg_header">#FF2A2A2C</color>
+    <color name="bg_card">#FF242426</color>
+    <color name="bg_row_selected">#FF2E2E30</color>
+    <color name="bg_bubble_peer">#FF2C2C2E</color>
+    <color name="bg_bubble_self">#FF3A3A3C</color>
+    <!-- Shared "this row/message is the one its popup belongs to" highlight — used for both a
+         device row and a chat bubble. -->
+    <color name="bg_selected_active">#FFFFCC66</color>
+    <!-- Popups (device long-press menu, message menu, "+" menu, confirm dialogs): lighter than
+         the screen behind them, with muted-but-legible text — one shared look everywhere. -->
+    <color name="bg_popup">#FF323234</color>
+    <color name="divider_popup">#FF46464A</color>
+
+    <color name="text_primary">#FFFFFFFF</color>
+    <color name="text_secondary">#FF9A9AA0</color>
+    <color name="text_muted">#FFD0D0D4</color>
+    <color name="divider">#FF3A3A3C</color>
+
+    <color name="status_online">#FF34C759</color>
+    <color name="status_offline_ring">#FF6C6C70</color>
+
+    <!-- Popup item color by meaning: affirmative/connect actions, destructive/negative ones. -->
+    <color name="action_positive">#FF34C759</color>
+    <color name="action_negative">#FFFF453A</color>
+
+    <color name="conn_connected">#FF34C759</color>
+    <color name="conn_disconnected">#FF8E8E93</color>
+    <color name="conn_unpaired">#FFFF3B30</color>
+    <color name="conn_offline">#FF48484A</color>
+</resources>

@@ -61,19 +61,26 @@ class PairingSessionTest {
         val identityB = IdentityStore.loadOrCreate(context, aliasB)
         val dbA = Room.inMemoryDatabaseBuilder(context, MeshDatabase::class.java).build()
         val dbB = Room.inMemoryDatabaseBuilder(context, MeshDatabase::class.java).build()
-        val yes = object : PairingPrompt {
-            override suspend fun confirmCertificateChanged(peerName: String) = true
-            override suspend fun confirmPin(peerName: String, pin: String) = true
-        }
-
         PairingListener(identityA, 0).use { listener ->
             val accepted = async { listener.accept() }
             val client = PairingSession.connect(identityB, "127.0.0.1", listener.port)
             val server = accepted.await()
+            val yesListener = object : PairingPrompt {
+                override suspend fun confirmCertificateChanged(peerName: String) = true
+                override suspend fun confirmPin(peerName: String, pin: String) = true
+                override suspend fun enterPin(peerName: String): String? = null
+                override suspend fun confirmReconnect(peerName: String) = true
+            }
+            val yesDialer = object : PairingPrompt {
+                override suspend fun confirmCertificateChanged(peerName: String) = true
+                override suspend fun confirmPin(peerName: String, pin: String) = true
+                override suspend fun enterPin(peerName: String): String? = client.computePin()
+                override suspend fun confirmReconnect(peerName: String) = true
+            }
             server.use { client.use {
                 val results = listOf(
-                    async { server.run("uuid-a", "Alpha", dbA.pairedDeviceDao(), yes) },
-                    async { client.run("uuid-b", "Bravo", dbB.pairedDeviceDao(), yes) }).awaitAll()
+                    async { server.run("uuid-a", "Alpha", dbA.pairedDeviceDao(), yesListener) },
+                    async { client.run("uuid-b", "Bravo", dbB.pairedDeviceDao(), yesDialer) }).awaitAll()
                 results.forEach { assertEquals(PairingResult.PAIRED, it.result) }
             } }
         }
