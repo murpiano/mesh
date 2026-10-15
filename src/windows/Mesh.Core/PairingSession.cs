@@ -39,8 +39,28 @@ public interface IPairingPrompt
     /// </summary>
     Task<bool> ConfirmCertificateChangedAsync(string peerName, CancellationToken ct);
 
-    /// <summary>Show the PIN; return true for "Match", false for "Not matching".</summary>
+    /// <summary>
+    /// Listener side only: show the PIN and ask "Does &lt;peerName&gt; want to connect?".
+    /// Return true for "Yes", false for "No".
+    /// </summary>
     Task<bool> ConfirmPinAsync(string peerName, string pin, CancellationToken ct);
+
+    /// <summary>
+    /// Dialer side only, and only after the listener has already approved: ask the user to type
+    /// the code shown on the listener's screen. Returns the typed digits, or null if the user
+    /// cancelled/declined. <see cref="PairingSession.RunAsync"/> does the comparison against the
+    /// locally-derived expected PIN — this method never sees that value, so there is nothing to
+    /// leak by returning the wrong thing.
+    /// </summary>
+    Task<string?> EnterPinAsync(string peerName, CancellationToken ct);
+
+    /// <summary>
+    /// Listener side only, and only for an already-trusted peer that flagged its connection
+    /// attempt as a manual (human-initiated) Connect: "&lt;peerName&gt; wants to connect. Allow?"
+    /// No PIN involved — trust is already established; this just lets a human decline a surprise
+    /// reconnect. Automatic background reconnects never reach this prompt.
+    /// </summary>
+    Task<bool> ConfirmReconnectAsync(string peerName, CancellationToken ct);
 }
 
 /// <summary>Thrown when the peer's revealed nonce does not match its earlier commitment.</summary>
@@ -72,11 +92,17 @@ public sealed class PairingSession : IDisposable
     public string? PeerUuid { get; private set; }
     public string? PeerName { get; private set; }
 
-    private PairingSession(TcpClient client, SslStream stream, X509Certificate2 localIdentity)
+    /// <summary>True if this side called <see cref="ConnectAsync"/> (dialed out); false if it
+    /// came from <see cref="AcceptAsync"/> (listening side). The two roles see different prompts
+    /// during pairing: the listener sees/shows the PIN, the dialer types it.</summary>
+    public bool IsDialer { get; }
+
+    private PairingSession(TcpClient client, SslStream stream, X509Certificate2 localIdentity, bool isDialer)
     {
         _client = client;
         _stream = stream;
         _localIdentity = localIdentity;
+        IsDialer = isDialer;
         var peerCert = stream.RemoteCertificate as X509Certificate2
             ?? new X509Certificate2(stream.RemoteCertificate!);
         PeerFingerprint = IdentityStore.Fingerprint(peerCert);
@@ -106,7 +132,7 @@ public sealed class PairingSession : IDisposable
                 // InvalidOperationException if the options try to set it again.
             }, ct).WaitAsync(NetworkTimeout, ct);
 
-            return new PairingSession(client, sslStream, identity);
+            return new PairingSession(client, sslStream, identity, isDialer: true);
         }
         catch
         {
@@ -129,7 +155,7 @@ public sealed class PairingSession : IDisposable
             await sslStream.AuthenticateAsServerAsync(identity, clientCertificateRequired: true,
                 checkCertificateRevocation: false).WaitAsync(NetworkTimeout);
 
-            return new PairingSession(client, sslStream, identity);
+            return new PairingSession(client, sslStream, identity, isDialer: false);
         }
         catch
         {
@@ -149,6 +175,25 @@ public sealed class PairingSession : IDisposable
             PeerUuid = await PairingProtocol.ReadStringAsync(_stream);
             PeerName = await PairingProtocol.ReadStringAsync(_stream);
         });
+    }
+
+    /// <summary>
+    /// Protocol step (new): each side announces whether this attempt is a human-initiated manual
+    /// Connect, as opposed to an automatic background reconnect. Only the dialer's flag is ever
+    /// meaningful — the listener always sends false (it never "manually Connects" within a single
+    /// exchange) — so the return value is "did the peer request manual confirmation", read by
+    /// whichever side needs it: the listener, when deciding whether to prompt before a trusted
+    /// reconnect.
+    /// </summary>
+    public async Task<bool> ExchangeManualIntentAsync(bool isManualConnect)
+    {
+        byte peer = 0;
+        await WithNetworkTimeout(async () =>
+        {
+            await PairingProtocol.WriteByteAsync(_stream, isManualConnect ? PairingProtocol.Yes : PairingProtocol.No);
+            peer = await PairingProtocol.ReadByteAsync(_stream);
+        });
+        return peer == PairingProtocol.Yes;
     }
 
     /// <summary>Protocol step 3. Returns true only if BOTH sides trust each other.</summary>
@@ -204,21 +249,53 @@ public sealed class PairingSession : IDisposable
 
     /// <summary>
     /// Runs the whole post-handshake protocol and writes the trust record only on mutual
-    /// success. Identical on the initiator and listener side. Never throws for network or
-    /// peer errors: they are reported through the returned outcome. Does not dispose the
-    /// session; callers own it (<c>using</c>).
+    /// success. Never throws for network or peer errors: they are reported through the returned
+    /// outcome. Does not dispose the session; callers own it (<c>using</c>).
+    ///
+    /// The dialer and listener play different roles throughout (see <see cref="IsDialer"/>):
+    /// the listener always answers first (it is the one who sees the PIN, or who is asked
+    /// "allow this reconnect?"); the dialer waits for that answer before showing anything of its
+    /// own. <paramref name="isManualConnect"/> is the dialer's only input to this asymmetry: pass
+    /// true for a human-initiated Connect-button press, false (the default) for an automatic
+    /// background reconnect, which must stay silent on both sides.
     /// </summary>
     public async Task<PairingOutcome> RunAsync(string selfUuid, string selfName, string pairedDevicesPath,
-        IPairingPrompt prompt)
+        IPairingPrompt prompt, bool isManualConnect = false)
     {
         PeerTrust trust;
+        bool peerRequestsConfirmation;
         string pin;
         try
         {
             await ExchangeIdentityAsync(selfUuid, selfName);
+            peerRequestsConfirmation = await ExchangeManualIntentAsync(isManualConnect);
             trust = CheckTrust(pairedDevicesPath, PeerUuid!, PeerFingerprint);
             if (await ExchangeTrustAsync(trust == PeerTrust.Trusted))
             {
+                // Both sides already trust each other: silent, UNLESS this is a manual Connect,
+                // in which case the listener gets one lightweight yes/no (no PIN — trust is
+                // already established) before finalizing. Automatic reconnects never reach this.
+                var needsConfirmation = IsDialer ? isManualConnect : peerRequestsConfirmation;
+                if (needsConfirmation)
+                {
+                    if (!IsDialer)
+                    {
+                        bool approved;
+                        try { approved = await prompt.ConfirmReconnectAsync(PeerName!, default).WaitAsync(UserTimeout); }
+                        catch (Exception) { approved = false; }
+                        await TrySendAsync(approved ? PairingProtocol.Yes : PairingProtocol.No);
+                        if (!approved) return Outcome(PairingResult.PairingFailed, "Declined on the other device.");
+                    }
+                    else
+                    {
+                        byte verdict;
+                        try { verdict = await PairingProtocol.ReadByteAsync(_stream).WaitAsync(UserTimeout); }
+                        catch (Exception ex) { return Outcome(PairingResult.PairingFailed, ex.Message); }
+                        if (verdict != PairingProtocol.Yes)
+                            return Outcome(PairingResult.PairingFailed, "The other device declined.");
+                    }
+                }
+
                 var existing = PairedDeviceStore.Find(pairedDevicesPath, PeerUuid!)!;
                 existing.LastIp = PeerIp;
                 existing.Name = PeerName!;
@@ -237,33 +314,70 @@ public sealed class PairingSession : IDisposable
             return Outcome(PairingResult.ConnectionFailed, ex.Message);
         }
 
-        // Step 6: user confirmation, raced against the peer's answer so an early
-        // "Not matching" on the other device closes our dialog immediately.
+        // Step 6: user confirmation. Sequential by role, not raced: the listener (who sees the
+        // PIN) answers first; only if they approve does the dialer get prompted at all — to type
+        // the code, never to compare it visually. Same cryptographic guarantee as before (both
+        // sides must land on the same `pin`, derived from the committed nonce exchange earlier);
+        // only which side sees vs. types it changed.
         try
         {
             using var promptCts = new CancellationTokenSource(UserTimeout);
-            var peerAnswer = PairingProtocol.ReadByteAsync(_stream);
-            _ = peerAnswer.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
-            var localAnswer = AskUserAsync(prompt, trust, pin, promptCts.Token);
 
-            if (await Task.WhenAny(localAnswer, peerAnswer) == peerAnswer &&
-                (!peerAnswer.IsCompletedSuccessfully || peerAnswer.Result != PairingProtocol.Yes))
+            if (!IsDialer)
             {
-                promptCts.Cancel();
-                await localAnswer;
-                await TrySendAsync(PairingProtocol.No);
-                return Outcome(PairingResult.PairingFailed, "The other device did not confirm the PIN.");
+                // Race our own prompt against a read of the dialer's eventual answer. In the
+                // happy path the dialer never sends anything until it has read ours, so this read
+                // only resolves early if the dialer vanished/misbehaved — same early-cancel trick
+                // as before, just scoped to this side: a dead peer closes our stale dialog instead
+                // of making us sit out the full UserTimeout.
+                var dialerAnswerTask = PairingProtocol.ReadByteAsync(_stream);
+                _ = dialerAnswerTask.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+                var localAnswerTask = AskUserAsync(prompt, trust, pin, promptCts.Token);
+
+                if (await Task.WhenAny(localAnswerTask, dialerAnswerTask) == dialerAnswerTask)
+                {
+                    promptCts.Cancel();
+                    await localAnswerTask;
+                    return Outcome(PairingResult.PairingFailed, "The other device disconnected.");
+                }
+
+                var localMatch = await localAnswerTask;
+                await TrySendAsync(localMatch ? PairingProtocol.Yes : PairingProtocol.No);
+                if (!localMatch)
+                    return Outcome(PairingResult.PairingFailed, "PIN not confirmed on this device.");
+
+                var dialerAnswer = await dialerAnswerTask.WaitAsync(UserTimeout);
+                if (dialerAnswer != PairingProtocol.Yes)
+                    return Outcome(PairingResult.PairingFailed, "The other device entered the wrong code.");
             }
+            else
+            {
+                if (trust == PeerTrust.CertificateChanged)
+                {
+                    bool certOk;
+                    try { certOk = await prompt.ConfirmCertificateChangedAsync(PeerName!, promptCts.Token).WaitAsync(promptCts.Token); }
+                    catch (Exception) { certOk = false; }
+                    if (!certOk)
+                    {
+                        await TrySendAsync(PairingProtocol.No); // nothing sent yet; tell the listener we're bailing
+                        return Outcome(PairingResult.PairingFailed, "Certificate change not confirmed.");
+                    }
+                }
 
-            var localMatch = await localAnswer;
-            await PairingProtocol.WriteByteAsync(_stream, localMatch ? PairingProtocol.Yes : PairingProtocol.No)
-                .WaitAsync(NetworkTimeout);
-            if (!localMatch)
-                return Outcome(PairingResult.PairingFailed, "PIN not confirmed on this device.");
+                byte peerAnswer;
+                try { peerAnswer = await PairingProtocol.ReadByteAsync(_stream).WaitAsync(UserTimeout); }
+                catch (Exception ex) { return Outcome(PairingResult.PairingFailed, ex.Message); }
+                if (peerAnswer != PairingProtocol.Yes)
+                    return Outcome(PairingResult.PairingFailed, "The other device did not confirm the PIN.");
 
-            var peer = await peerAnswer.WaitAsync(UserTimeout);
-            if (peer != PairingProtocol.Yes)
-                return Outcome(PairingResult.PairingFailed, "The other device did not confirm the PIN.");
+                string? typed;
+                try { typed = await prompt.EnterPinAsync(PeerName!, promptCts.Token).WaitAsync(UserTimeout); }
+                catch (Exception) { typed = null; }
+                var matches = typed == pin;
+                await TrySendAsync(matches ? PairingProtocol.Yes : PairingProtocol.No);
+                if (!matches)
+                    return Outcome(PairingResult.PairingFailed, "Entered code did not match.");
+            }
         }
         catch (Exception ex)
         {
@@ -281,6 +395,7 @@ public sealed class PairingSession : IDisposable
         return Outcome(PairingResult.Paired, "Paired.");
     }
 
+    /// <summary>Listener side only: cert-changed check (if needed) then show-PIN-and-ask.</summary>
     private async Task<bool> AskUserAsync(IPairingPrompt prompt, PeerTrust trust, string pin, CancellationToken ct)
     {
         try

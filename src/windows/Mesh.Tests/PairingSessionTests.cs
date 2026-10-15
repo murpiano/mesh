@@ -22,7 +22,16 @@ public sealed class TwoIdentitiesFixture : IDisposable
     public void Dispose() => Directory.Delete(_dir, recursive: true);
 }
 
-internal sealed class FakePrompt(bool pinAnswer, bool certChangedAnswer = true, bool hang = false) : IPairingPrompt
+/// <summary>
+/// Plays either pairing role. As a listener prompt (<see cref="ConfirmPinAsync"/>), <c>pinAnswer</c>
+/// is the "Match"/"Not matching" verdict. As a dialer prompt (<see cref="EnterPinAsync"/>), there
+/// is no PIN to compare visually — <c>pinAnswer</c> instead means "type the correct code", which
+/// requires <paramref name="session"/> (the dialer's own <see cref="PairingSession"/>) so this can
+/// read back the same value <see cref="PairingSession.ComputePin"/> will check against; false means
+/// "type something wrong" (modeled as declining/null, same effect — doesn't match).
+/// </summary>
+internal sealed class FakePrompt(bool pinAnswer, bool certChangedAnswer = true, bool hang = false,
+    PairingSession? session = null) : IPairingPrompt
 {
     public string? ShownPin { get; private set; }
     public bool CertChangedShown { get; private set; }
@@ -41,6 +50,14 @@ internal sealed class FakePrompt(bool pinAnswer, bool certChangedAnswer = true, 
         if (hang) await Task.Delay(Timeout.Infinite, ct);
         return pinAnswer;
     }
+
+    public async Task<string?> EnterPinAsync(string peerName, CancellationToken ct)
+    {
+        if (hang) await Task.Delay(Timeout.Infinite, ct);
+        return pinAnswer ? session?.ComputePin() : null;
+    }
+
+    public Task<bool> ConfirmReconnectAsync(string peerName, CancellationToken ct) => Task.FromResult(pinAnswer);
 }
 
 public class PairingSessionTests(TwoIdentitiesFixture ids) : IClassFixture<TwoIdentitiesFixture>
@@ -154,7 +171,7 @@ public class PairingSessionTests(TwoIdentitiesFixture ids) : IClassFixture<TwoId
         {
             var (server, client) = await ConnectPair(ids.CertA, ids.CertB);
             var promptA = new FakePrompt(pinAnswer: true);
-            var promptB = new FakePrompt(pinAnswer: true);
+            var promptB = new FakePrompt(pinAnswer: true, session: client);
             using (server)
             using (client)
             {
@@ -164,7 +181,6 @@ public class PairingSessionTests(TwoIdentitiesFixture ids) : IClassFixture<TwoId
                 Assert.All(results, r => Assert.Equal(PairingResult.Paired, r.Result));
             }
 
-            Assert.Equal(promptA.ShownPin, promptB.ShownPin);
             Assert.False(promptA.CertChangedShown);
 
             var recA = Assert.Single(PairedDeviceStore.Load(storeA));
@@ -201,7 +217,7 @@ public class PairingSessionTests(TwoIdentitiesFixture ids) : IClassFixture<TwoId
             {
                 var results = await Task.WhenAll(
                     server.RunAsync("uuid-a", "Alpha", storeA, new FakePrompt(answerA)),
-                    client.RunAsync("uuid-b", "Bravo", storeB, new FakePrompt(answerB)));
+                    client.RunAsync("uuid-b", "Bravo", storeB, new FakePrompt(answerB, session: client)));
                 Assert.All(results, r => Assert.Equal(PairingResult.PairingFailed, r.Result));
             }
             Assert.False(File.Exists(storeA));
@@ -254,6 +270,7 @@ public class PairingSessionTests(TwoIdentitiesFixture ids) : IClassFixture<TwoId
             {
                 var serverRun = server.RunAsync("uuid-a", "Alpha", storeA, new FakePrompt(true, hang: true));
                 await client.ExchangeIdentityAsync("uuid-b", "Bravo");
+                await client.ExchangeManualIntentAsync(false);
                 await client.ExchangeTrustAsync(false);
                 await client.ExchangeNoncesAsync();
                 client.Dispose(); // vanish while A's PIN dialog is up
@@ -283,7 +300,7 @@ public class PairingSessionTests(TwoIdentitiesFixture ids) : IClassFixture<TwoId
             {
                 await Task.WhenAll(
                     server.RunAsync("uuid-a", "Alpha", storeA, new FakePrompt(true)),
-                    client.RunAsync("uuid-b", "Bravo", storeB, new FakePrompt(true)));
+                    client.RunAsync("uuid-b", "Bravo", storeB, new FakePrompt(true, session: client)));
             }
 
             // Reconnect with roles swapped: A initiates to B (B is now the listener).
@@ -323,7 +340,7 @@ public class PairingSessionTests(TwoIdentitiesFixture ids) : IClassFixture<TwoId
             });
             var (server, client) = await ConnectPair(ids.CertA, ids.CertB);
             var promptA = new FakePrompt(true);
-            var promptB = new FakePrompt(true);
+            var promptB = new FakePrompt(true, session: client);
             using (server)
             using (client)
             {
@@ -333,7 +350,6 @@ public class PairingSessionTests(TwoIdentitiesFixture ids) : IClassFixture<TwoId
                 Assert.All(results, r => Assert.Equal(PairingResult.Paired, r.Result));
             }
             Assert.True(promptA.PinShown);
-            Assert.True(promptB.PinShown);
             Assert.Single(PairedDeviceStore.Load(storeB));
         }
         finally
@@ -396,7 +412,7 @@ public class PairingSessionTests(TwoIdentitiesFixture ids) : IClassFixture<TwoId
             {
                 var results = await Task.WhenAll(
                     server.RunAsync("uuid-a", "Alpha", storeA, promptA),
-                    client.RunAsync("uuid-b", "Bravo", storeB, new FakePrompt(true)));
+                    client.RunAsync("uuid-b", "Bravo", storeB, new FakePrompt(true, session: client)));
                 Assert.All(results, r => Assert.Equal(PairingResult.Paired, r.Result));
             }
             Assert.True(promptA.CertChangedShown);
