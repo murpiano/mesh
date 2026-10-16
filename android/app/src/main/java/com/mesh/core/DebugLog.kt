@@ -9,7 +9,8 @@ import java.util.Locale
 /**
  * Temporary diagnostic log for the "Connect on an already-paired/Trusted device still asks for a
  * PIN" repro: appends timestamped lines to <app files dir>/debug.log (pull with
- * `adb exec-out run-as com.mesh cat files/debug.log`). Mirrors Windows' Mesh.Core/DebugLog.cs.
+ * `adb exec-out run-as com.mesh.debug cat files/debug.log`; run-as works only on debug builds).
+ * Mirrors Windows' Mesh.Core/DebugLog.cs.
  * Not for production telemetry — remove once that bug is found and fixed.
  */
 object DebugLog {
