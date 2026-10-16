@@ -14,6 +14,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
+import com.mesh.BuildConfig
 import com.mesh.R
 import com.mesh.core.*
 import kotlinx.coroutines.CancellationException
@@ -79,7 +80,8 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
     private lateinit var discovery: MeshDiscovery
     private var identity: Pair<X509Certificate, PrivateKey>? = null
     private var selfUuid: String? = null
-    private val selfName: String = Build.MODEL
+    // A debug build is the separate "Mesh Dev" app; the suffix tells it apart on the other side.
+    private val selfName: String = if (BuildConfig.DEBUG) "${Build.MODEL} (dev)" else Build.MODEL
     private var listener: PairingListener? = null
 
     // Notifications aren't required for the foreground service to work, only to show it — the

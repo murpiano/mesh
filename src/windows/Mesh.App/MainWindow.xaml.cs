@@ -26,8 +26,7 @@ namespace Mesh.App;
 /// </summary>
 public partial class MainWindow : Window, IPairingPrompt
 {
-    private static readonly string MeshDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Mesh");
+    private static readonly string MeshDir = MeshApp.DataDir;
     private readonly string _pairedDevicesPath = Path.Combine(MeshDir, "paired_devices.json");
     private readonly string _chatDbPath = Path.Combine(MeshDir, "chat_history.db");
 
@@ -76,7 +75,7 @@ public partial class MainWindow : Window, IPairingPrompt
     private readonly ObservableCollection<DeviceRow> _deviceRows = new();
     private readonly X509Certificate2 _identity;
     private readonly string _selfUuid;
-    private readonly string _selfName = Environment.MachineName;
+    private readonly string _selfName = Environment.MachineName + MeshApp.DeviceNameSuffix;
     private readonly PairingListener _listener;
     private readonly CancellationTokenSource _shutdown = new();
 
@@ -173,6 +172,7 @@ public partial class MainWindow : Window, IPairingPrompt
     public MainWindow()
     {
         InitializeComponent();
+        Title = MeshApp.Name;
         DeviceListBox.ItemsSource = _deviceRows;
         ChatListBox.ItemsSource = _chatRows;
         _popup = new DarkPopup(PopupLayer);

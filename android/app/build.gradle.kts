@@ -18,6 +18,11 @@ android {
         val (major, minor, patch) = meshVersion.split(".").map { it.toInt() }
         versionCode = major * 10000 + minor * 100 + patch
         versionName = meshVersion
+        manifestPlaceholders["appLabel"] = "Mesh"
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     // Checked into the repo on purpose: Android refuses to install an update signed by a
@@ -26,8 +31,9 @@ android {
     // signing config instead auto-generates a random keystore per machine, so a build from one
     // machine can never update an install from another. Pinning this one fixed debug keystore
     // for every debug build — mine and yours — means `adb install -r app-debug.apk` (or tapping
-    // the APK again to "Update") always works, no reinstall needed. Debug-only: never used for
-    // release signing, and the usual "debug keystore" risk profile (not secret, not meant to be).
+    // the APK again to "Update") always updates Mesh Dev, no reinstall needed. Debug-only: never
+    // used for release signing, and the usual "debug keystore" risk profile (not secret, not
+    // meant to be).
     signingConfigs {
         getByName("debug") {
             storeFile = file("debug.keystore")
@@ -48,6 +54,13 @@ android {
     }
 
     buildTypes {
+        // A debug build is a separate app, "Mesh Dev", installed next to the release "Mesh":
+        // a different signing key would otherwise force uninstalling one to install the other.
+        // It also gets its own identity, pairings and chat.
+        debug {
+            applicationIdSuffix = ".debug"
+            manifestPlaceholders["appLabel"] = "Mesh Dev"
+        }
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.findByName("release")
