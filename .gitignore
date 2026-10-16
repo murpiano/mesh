@@ -5,10 +5,11 @@ node_modules/
 # Local runtime data of the desktop app: device identity key, paired devices, history.
 d/
 
-# Signing keys and certificates.
+# Signing keys and certificates. The shared debug keystore is committed on purpose.
 *.keystore
 *.jks
 *.pfx
+!android/app/debug.keystore
 
 # Design reference material.
 raw/
