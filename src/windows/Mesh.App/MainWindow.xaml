@@ -1,119 +1,260 @@
 <Window x:Class="Mesh.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Mesh" Height="500" Width="420">
+        Title="Mesh" Width="420" Height="760" MinWidth="360" MinHeight="520"
+        WindowStartupLocation="CenterScreen" Background="{StaticResource BgScreen}"
+        Foreground="{StaticResource TextPrimary}"
+        PreviewMouseDown="Window_PreviewMouseDown" PreviewKeyDown="Window_PreviewKeyDown">
     <Window.Resources>
-        <!-- Shared by every dynamically-created device tab's chat ListBox (see BuildDeviceTab).
-             Own messages right-aligned/blue, peer messages left-aligned/gray — a normal chat
-             layout. The TextBox is read-only by default; MainWindow.xaml.cs flips IsReadOnly to
-             let the user edit an own message in place, and relies on the TextBox's native
-             selection/Copy for "hold to select text". -->
+        <!-- One chat message row. The row spans the full width with a transparent background, so a
+             click beside the bubble also counts as a click on that message, like on Android. -->
         <Style x:Key="ChatBubbleBorderStyle" TargetType="Border">
             <Setter Property="HorizontalAlignment" Value="Left"/>
-            <Setter Property="Background" Value="#FFE5E5EA"/>
-            <Setter Property="CornerRadius" Value="12"/>
-            <Setter Property="Padding" Value="10,6"/>
-            <Setter Property="Margin" Value="4,3"/>
-            <Setter Property="MaxWidth" Value="280"/>
+            <Setter Property="Background" Value="{StaticResource BgBubblePeer}"/>
+            <Setter Property="CornerRadius" Value="14"/>
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="MaxWidth" Value="260"/>
             <Style.Triggers>
                 <DataTrigger Binding="{Binding IsOwn}" Value="True">
                     <Setter Property="HorizontalAlignment" Value="Right"/>
-                    <Setter Property="Background" Value="#FF3C9CFF"/>
+                    <Setter Property="Background" Value="{StaticResource BgBubbleSelf}"/>
                 </DataTrigger>
-            </Style.Triggers>
-        </Style>
-        <Style x:Key="ChatBubbleTextStyle" TargetType="TextBox">
-            <Setter Property="IsReadOnly" Value="True"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="TextWrapping" Value="Wrap"/>
-            <Setter Property="Foreground" Value="Black"/>
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding IsOwn}" Value="True">
-                    <Setter Property="Foreground" Value="White"/>
-                </DataTrigger>
-            </Style.Triggers>
-        </Style>
-        <Style x:Key="ChatSenderLabelStyle" TargetType="TextBlock">
-            <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="FontSize" Value="10"/>
-            <Setter Property="Opacity" Value="0.6"/>
-            <Setter Property="Visibility" Value="Visible"/>
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding IsOwn}" Value="True">
-                    <Setter Property="Visibility" Value="Collapsed"/>
+                <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
+                    <Setter Property="Background" Value="{StaticResource BgSelectedActive}"/>
                 </DataTrigger>
             </Style.Triggers>
         </Style>
         <DataTemplate x:Key="ChatBubbleTemplate">
-            <Border Style="{StaticResource ChatBubbleBorderStyle}">
+            <Grid Background="Transparent" Margin="0,2"
+                  PreviewMouseLeftButtonUp="ChatRow_LeftClick" PreviewMouseRightButtonUp="ChatRow_RightClick">
+                <Border Style="{StaticResource ChatBubbleBorderStyle}">
+                    <TextBox Name="BubbleText" Text="{Binding Message.DisplayText, Mode=OneWay}"
+                             IsReadOnly="True" BorderThickness="0" Background="Transparent" Padding="0"
+                             TextWrapping="Wrap" FontSize="15" Foreground="{StaticResource TextPrimary}"
+                             SelectionBrush="{StaticResource BgSelectedActive}"
+                             ContextMenuService.IsEnabled="False"/>
+                </Border>
+            </Grid>
+        </DataTemplate>
+
+        <Style x:Key="HeaderTitle" TargetType="Button" BasedOn="{StaticResource TextButton}">
+            <Setter Property="Content" Value="Mesh"/>
+            <Setter Property="FontSize" Value="26"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+        </Style>
+        <Style x:Key="GearButton" TargetType="Button" BasedOn="{StaticResource TextButton}">
+            <Setter Property="Content" Value="&#x2699;"/>
+            <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+            <Setter Property="Cursor" Value="Arrow"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <!-- Devices page (Android: fragment_devices.xml) -->
+        <DockPanel Name="DevicesPage">
+            <Border DockPanel.Dock="Top" Background="{StaticResource BgHeader}" Padding="20,16">
+                <Grid>
+                    <Button Style="{StaticResource HeaderTitle}" HorizontalAlignment="Left"
+                            Click="MeshTitle_Click"/>
+                    <Button Style="{StaticResource GearButton}" FontSize="22" HorizontalAlignment="Right"
+                            VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+
+            <Border DockPanel.Dock="Top" Name="MdnsErrorBanner" Visibility="Collapsed"
+                    Background="{StaticResource BgMdnsError}" Padding="10" Margin="16,16,16,0">
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Style="{StaticResource TextButton}" Content="Refresh"
+                            Foreground="{StaticResource TextPrimary}" FontSize="14" VerticalAlignment="Center"
+                            Margin="8,0,0,0" Click="RefreshButton_Click"/>
+                    <TextBlock Text="mDNS unreachable — check firewall settings" TextWrapping="Wrap"
+                               Foreground="{StaticResource TextMuted}" VerticalAlignment="Center"/>
+                </DockPanel>
+            </Border>
+
+            <Border Background="{StaticResource BgCard}" CornerRadius="12" Margin="16" Padding="16">
+                <!-- Shared size scope: the Status column is exactly as wide as the word "Devices"
+                     above it, in the header and in every row (hidden "Devices" sizers below). -->
+                <Grid Grid.IsSharedSizeScope="True">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Devices" FontSize="17" FontWeight="Bold"
+                               HorizontalAlignment="Center" Margin="0,0,0,12"/>
+                    <Grid Grid.Row="1" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="Status"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Devices" FontSize="17" FontWeight="Bold" Height="0" Visibility="Hidden"/>
+                        <TextBlock Text="Status" FontSize="13" FontWeight="Bold" Foreground="{StaticResource TextSecondary}"
+                                   HorizontalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="Name" FontSize="13" FontWeight="Bold"
+                                   Foreground="{StaticResource TextSecondary}"/>
+                        <TextBlock Grid.Column="2" Text="State" FontSize="13" FontWeight="Bold"
+                                   Foreground="{StaticResource TextSecondary}"/>
+                    </Grid>
+                    <Border Grid.Row="2" Height="1" Background="{StaticResource Divider}" Margin="0,0,0,4"/>
+                    <ListBox Grid.Row="3" Name="DeviceListBox" Style="{StaticResource PlainListBox}"
+                             AlternationCount="100000">
+                        <ListBox.ItemContainerStyle>
+                            <!-- A divider between rows, not above the first one. -->
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource PlainListBoxItem}">
+                                <Setter Property="BorderBrush" Value="{StaticResource Divider}"/>
+                                <Setter Property="BorderThickness" Value="0,1,0,0"/>
+                                <Style.Triggers>
+                                    <Trigger Property="ItemsControl.AlternationIndex" Value="0">
+                                        <Setter Property="BorderThickness" Value="0"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Cursor="Hand"
+                                      MouseLeftButtonUp="DeviceRow_LeftClick" MouseRightButtonUp="DeviceRow_RightClick">
+                                    <Grid.Style>
+                                        <!-- Background in the style, not on the Grid: a local value
+                                             would override the highlight trigger. -->
+                                        <Style TargetType="Grid">
+                                            <Setter Property="Background" Value="Transparent"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
+                                                    <Setter Property="Background" Value="{StaticResource BgSelectedActive}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Grid.Style>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="Status"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Devices" FontSize="17" FontWeight="Bold" Height="0" Visibility="Hidden"/>
+                                    <Ellipse Width="14" Height="14" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                             StrokeThickness="2">
+                                        <Ellipse.Style>
+                                            <Style TargetType="Ellipse">
+                                                <Setter Property="Fill" Value="Transparent"/>
+                                                <Setter Property="Stroke" Value="{StaticResource StatusOfflineRing}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsOnline}" Value="True">
+                                                        <Setter Property="Fill" Value="{StaticResource StatusOnline}"/>
+                                                        <Setter Property="Stroke" Value="{StaticResource StatusOnline}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Ellipse.Style>
+                                    </Ellipse>
+                                    <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="16" Margin="0,14"
+                                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding StateLabel}" FontSize="14"
+                                               Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+        </DockPanel>
+
+        <!-- Device page (Android: fragment_device.xml) -->
+        <DockPanel Name="DevicePage" Visibility="Collapsed">
+            <Border DockPanel.Dock="Top" Background="{StaticResource BgHeader}" Padding="20,16,20,2">
                 <StackPanel>
-                    <TextBlock Text="{Binding Message.SenderLabel}" Style="{StaticResource ChatSenderLabelStyle}"/>
-                    <TextBox Text="{Binding Message.DisplayText, Mode=OneWay}" Tag="{Binding}"
-                             Style="{StaticResource ChatBubbleTextStyle}"
-                             PreviewMouseLeftButtonUp="ChatBubble_Click"/>
+                    <Grid>
+                        <Button Style="{StaticResource HeaderTitle}" HorizontalAlignment="Left"
+                                Click="MeshTitle_Click"/>
+                        <TextBlock Name="DeviceNameText" FontSize="22" Foreground="{StaticResource TextSecondary}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis" MaxWidth="200"/>
+                        <Button Style="{StaticResource GearButton}" FontSize="20" HorizontalAlignment="Right"
+                                VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid Margin="0,2,0,0">
+                        <Button Style="{StaticResource TextButton}" Content="&#x2190;" FontSize="22"
+                                Foreground="{StaticResource TextSecondary}" HorizontalAlignment="Left"
+                                Click="BackButton_Click"/>
+                        <TextBlock Name="ConnectionStatusLabel" FontSize="11" HorizontalAlignment="Center"
+                                   VerticalAlignment="Bottom"/>
+                    </Grid>
                 </StackPanel>
             </Border>
-        </DataTemplate>
-    </Window.Resources>
-    <TabControl Name="MainTabControl">
-        <TabItem Header="Devices">
-            <Grid Margin="12">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <!-- Second, section-strip tab row — see MainWindow.xaml.cs's BuildSectionStrip.
-                     Always present (same reserved height) below the top-level tab headers;
-                     empty here since the Devices tab has no sub-sections of its own. -->
-                <Border Grid.Row="0" Name="DevicesSectionStrip" Height="32" Margin="0,0,0,8"
-                        BorderBrush="#FFD3D3D3" BorderThickness="0,0,0,1"/>
-                <Border Grid.Row="1" Name="MdnsErrorBanner" Visibility="Collapsed"
-                        Background="#FFFDECEA" BorderBrush="#FFE57373" BorderThickness="1"
-                        Padding="8" Margin="0,0,0,8">
-                    <DockPanel>
-                        <Button DockPanel.Dock="Right" Name="RefreshButton" Content="Refresh"
-                                Padding="10,2" Click="RefreshButton_Click"/>
-                        <TextBlock Text="mDNS unreachable — check firewall settings"
-                                   VerticalAlignment="Center" TextWrapping="Wrap"/>
-                    </DockPanel>
+            <Border DockPanel.Dock="Top" Name="ConnectionStatusStripe" Height="3"/>
+            <Grid DockPanel.Dock="Top" Background="{StaticResource BgHeader}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition/>
+                    <ColumnDefinition/>
+                </Grid.ColumnDefinitions>
+                <Border Name="ChatSectionTab" Grid.Column="0" Padding="0,14,0,12" Cursor="Hand"
+                        MouseLeftButtonUp="ChatSectionTab_Click">
+                    <TextBlock Name="ChatSectionLabel" Text="chat" FontSize="18" FontWeight="Bold"
+                               HorizontalAlignment="Center"/>
                 </Border>
-                <TextBlock Grid.Row="2" Text="Devices" FontWeight="Bold" Margin="0,0,0,8"/>
-                <ListBox Grid.Row="3" Name="DeviceListBox">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <Grid Margin="0,6" MouseLeftButtonUp="DeviceRow_Click">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="{Binding Name}" Foreground="{Binding NameBrush}"
-                                           VerticalAlignment="Center" FontSize="14"/>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                    <Button Content="Pair" Width="70" Click="PairButton_Click" Tag="{Binding}"
-                                            Visibility="{Binding PairVisibility}" IsEnabled="{Binding PairEnabled}"/>
-                                    <Button Content="{Binding ConnectLabel}" Width="80" Margin="4,0,0,0"
-                                            Background="{Binding ConnectBrush}" IsEnabled="{Binding ConnectEnabled}"
-                                            Click="ConnectRow_Click" Tag="{Binding}"
-                                            Visibility="{Binding PairedVisibility}"/>
-                                    <Button Content="Disconnect" Width="80" Margin="4,0,0,0"
-                                            Background="{Binding DisconnectBrush}" IsEnabled="{Binding DisconnectEnabled}"
-                                            Click="DisconnectRow_Click" Tag="{Binding}"
-                                            Visibility="{Binding PairedVisibility}"/>
-                                    <Button Content="&#x2715;" Width="28" Margin="4,0,0,0" Foreground="DarkRed"
-                                            IsEnabled="{Binding UnpairEnabled}"
-                                            Click="UnpairButton_Click" Tag="{Binding}"
-                                            Visibility="{Binding PairedVisibility}"/>
-                                </StackPanel>
-                            </Grid>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-                <TextBlock Grid.Row="4" Name="StatusText" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="Gray"/>
+                <Border Name="ExplorerSectionTab" Grid.Column="1" Padding="0,14,0,12" Cursor="Hand"
+                        MouseLeftButtonUp="ExplorerSectionTab_Click">
+                    <TextBlock Name="ExplorerSectionLabel" Text="explorer" FontSize="18" FontWeight="Bold"
+                               HorizontalAlignment="Center"/>
+                </Border>
             </Grid>
-        </TabItem>
-    </TabControl>
+            <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource Divider}"/>
+
+            <Grid>
+                <!-- Chat section (Android: fragment_chat.xml) -->
+                <DockPanel Name="ChatSection" Margin="12">
+                    <Grid DockPanel.Dock="Bottom">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Button Name="AttachButton" Style="{StaticResource TextButton}" Width="40" Height="40"
+                                VerticalAlignment="Bottom" Click="AttachButton_Click">
+                            <Border Width="40" Height="40" CornerRadius="12" Background="{StaticResource BgBubblePeer}">
+                                <TextBlock Text="+" FontSize="20" Foreground="{StaticResource TextSecondary}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </Button>
+                        <Grid Grid.Column="1" Margin="8,0,0,0">
+                            <TextBox Name="ChatInputBox" Style="{StaticResource DarkTextBox}" TextWrapping="Wrap"
+                                     AcceptsReturn="True" MaxHeight="110" VerticalScrollBarVisibility="Auto"
+                                     PreviewKeyDown="ChatInputBox_PreviewKeyDown" TextChanged="ChatInputBox_TextChanged"/>
+                            <TextBlock Name="ChatInputHint" Text="Type a message…" FontSize="15" IsHitTestVisible="False"
+                                       Foreground="{StaticResource TextSecondary}" Margin="18,0,0,0"
+                                       VerticalAlignment="Center"/>
+                        </Grid>
+                        <Button Name="SendButton" Grid.Column="2" Style="{StaticResource TextButton}" Content="Send"
+                                FontSize="15" Margin="12,0,0,0" VerticalAlignment="Center" Click="SendButton_Click"/>
+                    </Grid>
+                    <TextBlock DockPanel.Dock="Bottom" Name="NotConnectedHint"
+                               Text="Not connected — connect on the Devices tab to send."
+                               FontStyle="Italic" FontSize="13" Foreground="{StaticResource TextSecondary}"
+                               TextWrapping="Wrap" Margin="0,0,0,4"/>
+                    <ListBox Name="ChatListBox" Style="{StaticResource PlainListBox}"
+                             ItemTemplate="{StaticResource ChatBubbleTemplate}"/>
+                </DockPanel>
+
+                <!-- Explorer section (Android: fragment_explorer.xml) -->
+                <TextBlock Name="ExplorerSection" Visibility="Collapsed" Text="Coming soon" FontSize="15"
+                           Foreground="{StaticResource TextSecondary}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Grid>
+        </DockPanel>
+
+        <!-- Short transient notice, the Android Toast: see ShowToast. -->
+        <Border Name="Toast" Visibility="Collapsed" IsHitTestVisible="False" Background="#E6323234"
+                CornerRadius="16" Padding="16,8" Margin="0,0,0,80"
+                HorizontalAlignment="Center" VerticalAlignment="Bottom">
+            <TextBlock Name="ToastText" FontSize="13" Foreground="{StaticResource TextPrimary}"/>
+        </Border>
+        <!-- Overlay for the shared popup menu: no background, so clicks outside the popup card
+             still reach the page underneath (see DarkPopup). -->
+        <Grid Name="PopupLayer"/>
+        <!-- Overlay for modal dialogs (DarkDialog), each with its own dimmed scrim. -->
+        <Grid Name="DialogLayer"/>
+    </Grid>
 </Window>
