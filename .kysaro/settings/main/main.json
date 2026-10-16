@@ -1,0 +1,54 @@
+{
+  "$schema": "../../../node_modules/kysaro/src/settings/schemas/main.schema.json",
+  "generator": {
+    "enabled": false,
+    "priorityUse": "input"
+  },
+  "normalizer": {
+    "enabled": true,
+    "trimMessage": true,
+    "trimLines": true,
+    "blankLines": {
+      "maxConsecutive": 1,
+      "trimStart": true,
+      "trimEnd": true
+    },
+    "removeComments": true,
+    "eol": "lf",
+    "ensureFinalNewline": true
+  },
+  "validator": {
+    "enabled": true,
+    "severity": "error"
+  },
+  "analyzer": {
+    "enabled": false,
+    "correction": {
+      "enabled": false,
+      "ai": {
+        "enabled": false
+      }
+    },
+    "semantic": {
+      "enabled": false
+    }
+  },
+  "fixer": {
+    "enabled": false,
+    "mode": "apply",
+    "confidenceThreshold": 1
+  },
+  "output": {
+    "invalid": "return"
+  },
+  "ignore": {
+    "kinds": [
+      "revert"
+    ],
+    "patterns": [
+      "fixup! ",
+      "squash! ",
+      "amend! "
+    ]
+  }
+}

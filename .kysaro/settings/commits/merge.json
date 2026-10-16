@@ -1,0 +1,56 @@
+{
+  "$schema": "../../../node_modules/kysaro/src/settings/schemas/merge.schema.json",
+  "preset": "Conventional Commits",
+  "header": {
+    "maxLength": 80,
+    "format": "type(scope): subject",
+    "reference": "allow",
+    "type": {
+      "value": {
+        "fromFiles": [
+          "../resources/types.json"
+        ]
+      },
+      "case": "lower"
+    },
+    "scope": {
+      "required": false,
+      "source": "any",
+      "case": "lower",
+      "multiple": {
+        "maxItems": 1
+      },
+      "onMultiple": "join"
+    },
+    "subject": {
+      "minLength": 5,
+      "case": "lower",
+      "disallowTrailingPeriod": true
+    }
+  },
+  "body": {
+    "required": true,
+    "minLength": 50,
+    "blankLineBefore": true,
+    "maxLineLength": 0
+  },
+  "footer": {
+    "required": false,
+    "blankLineBefore": true,
+    "maxLineLength": 0,
+    "format": "token: value",
+    "token": {
+      "source": "any",
+      "case": "match-source"
+    },
+    "value": {
+      "minLength": 1,
+      "case": "any"
+    }
+  },
+  "breakingChange": {
+    "header": "allow",
+    "footer": "allow",
+    "requireAtLeastOne": false
+  }
+}

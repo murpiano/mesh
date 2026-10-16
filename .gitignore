@@ -1,0 +1,14 @@
+.kysaro/*.md
+
+node_modules/
+
+# Local runtime data of the desktop app: device identity key, paired devices, history.
+d/
+
+# Signing keys and certificates.
+*.keystore
+*.jks
+*.pfx
+
+# Design reference material.
+raw/
