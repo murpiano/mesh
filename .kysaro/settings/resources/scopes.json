@@ -1,0 +1,34 @@
+{
+  "$schema": "../../../node_modules/kysaro/src/settings/schemas/scopes.schema.json",
+  "preset": "Conventional Commits",
+  "auth": {
+    "description": "Authentication and authorization flows"
+  },
+  "ui": {
+    "description": "User interface components, design system, and layouts"
+  },
+  "api": {
+    "description": "Data fetching logic, API clients, and endpoints"
+  },
+  "core": {
+    "description": "Business logic, global state, and essential services"
+  },
+  "config": {
+    "description": "Project configuration files and environment variables"
+  },
+  "deps": {
+    "description": "Dependency management and package updates"
+  },
+  "tests": {
+    "description": "Unit, integration, and end-to-end testing"
+  },
+  "docs": {
+    "description": "Technical documentation, README, and JSDoc"
+  },
+  "db": {
+    "description": "Database schemas, migrations, and query logic"
+  },
+  "build": {
+    "description": "Build scripts, bundler settings, and deployment tools"
+  }
+}

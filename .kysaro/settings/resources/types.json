@@ -1,0 +1,40 @@
+{
+  "$schema": "../../../node_modules/kysaro/src/settings/schemas/types.schema.json",
+  "preset": "Conventional Commits",
+  "feat": {
+    "description": "New feature"
+  },
+  "fix": {
+    "description": "Bug fix"
+  },
+  "refactor": {
+    "description": "Refactoring"
+  },
+  "style": {
+    "description": "Styles/UI"
+  },
+  "build": {
+    "description": "Build/Deps"
+  },
+  "chore": {
+    "description": "Maintenance"
+  },
+  "docs": {
+    "description": "Documentation"
+  },
+  "test": {
+    "description": "Tests"
+  },
+  "perf": {
+    "description": "Performance"
+  },
+  "ci": {
+    "description": "CI/CD"
+  },
+  "revert": {
+    "description": "Revert"
+  },
+  "merge": {
+    "description": "Merge"
+  }
+}
