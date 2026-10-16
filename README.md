@@ -5,6 +5,7 @@
 Mesh links a Windows PC and an Android phone on the same local network so they can chat. The desktop app runs on .NET 8 and WPF, the phone app is written in Kotlin.
 
 [![CI](https://github.com/murpiano/mesh/actions/workflows/ci.yml/badge.svg)](https://github.com/murpiano/mesh/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/murpiano/mesh?color=informational)](https://github.com/murpiano/mesh/releases/latest)
 
 [How it works](#how-it-works) · [Run locally](#run-locally)
 
