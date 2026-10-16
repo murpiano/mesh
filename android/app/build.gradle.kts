@@ -12,8 +12,12 @@ android {
         applicationId = "com.mesh"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1"
+        // Release builds pass the tag's version: -PmeshVersion=1.2.3 gives versionName 1.2.3
+        // and versionCode 10203, so every release installs over the previous one.
+        val meshVersion = (findProperty("meshVersion") as String?) ?: "0.1.0"
+        val (major, minor, patch) = meshVersion.split(".").map { it.toInt() }
+        versionCode = major * 10000 + minor * 100 + patch
+        versionName = meshVersion
     }
 
     // Checked into the repo on purpose: Android refuses to install an update signed by a
@@ -31,11 +35,22 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        // The release key is never in the repo. CI writes it from a secret and points
+        // MESH_KEYSTORE at it; without that variable the release APK stays unsigned.
+        System.getenv("MESH_KEYSTORE")?.let { path ->
+            create("release") {
+                storeFile = file(path)
+                storePassword = System.getenv("MESH_KEYSTORE_PASSWORD")
+                keyAlias = "mesh"
+                keyPassword = System.getenv("MESH_KEYSTORE_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 
