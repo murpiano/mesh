@@ -56,11 +56,11 @@ class MeshSessionTest {
             onMessageReceived = { received.complete(it) }
         )
         try {
-            server.send(ClipboardPush(1L, "hi from server"))
+            server.send(ChatSend("msg-1", 1L, "hi from server"))
 
             val result = withTimeout(5000) { received.await() }
-            assertTrue(result is ClipboardPush)
-            assertEquals("hi from server", (result as ClipboardPush).text)
+            assertTrue(result is ChatSend)
+            assertEquals("hi from server", (result as ChatSend).text)
         } finally {
             server.close(); client.close()
         }
@@ -98,7 +98,7 @@ class MeshSessionTest {
         val clientTransport = clientPairing.detachTransport()
 
         // Write directly on the raw transport, before any MeshSession exists on either side.
-        MeshMessage.write(serverTransport.output, ClipboardPush(2L, "buffered before construction"))
+        MeshMessage.write(serverTransport.output, ChatSend("msg-2", 2L, "buffered before construction"))
 
         val received = CompletableDeferred<MeshMessage>()
         val server = MeshSession.fromTransport(serverTransport, "peer-client", "127.0.0.1", 0)
@@ -108,15 +108,15 @@ class MeshSessionTest {
         )
         try {
             val result = withTimeout(5000) { received.await() }
-            assertTrue(result is ClipboardPush)
-            assertEquals("buffered before construction", (result as ClipboardPush).text)
+            assertTrue(result is ChatSend)
+            assertEquals("buffered before construction", (result as ChatSend).text)
         } finally {
             server.close(); client.close()
         }
     }
 
     @Test
-    fun `drainPendingSends empties queue and returns ClipboardPush messages in order`() = runBlocking {
+    fun `drainPendingSends empties queue and returns ChatSend messages in order`() = runBlocking {
         val (serverPairing, clientPairing) = connectPair(idA, idB)
         val server = MeshSession.fromTransport(serverPairing.detachTransport(), "peer-client", "127.0.0.1", 0)
         val client = MeshSession.fromTransport(clientPairing.detachTransport(), "peer-server", "127.0.0.1", 0)
@@ -125,14 +125,14 @@ class MeshSessionTest {
             server.close()
             delay(2000) // allow the client's read/heartbeat loop to detect the disconnect
 
-            client.send(ClipboardPush(10L, "first"))
-            client.send(ClipboardPush(20L, "second"))
+            client.send(ChatSend("msg-10", 10L, "first"))
+            client.send(ChatSend("msg-20", 20L, "second"))
 
             val drained = client.drainPendingSends()
 
             assertEquals(2, drained.size)
-            assertEquals("first", (drained[0] as ClipboardPush).text)
-            assertEquals("second", (drained[1] as ClipboardPush).text)
+            assertEquals("first", (drained[0] as ChatSend).text)
+            assertEquals("second", (drained[1] as ChatSend).text)
 
             val drainedAgain = client.drainPendingSends()
             assertTrue(drainedAgain.isEmpty())

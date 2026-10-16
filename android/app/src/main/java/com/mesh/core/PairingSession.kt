@@ -51,16 +51,29 @@ data class PairingOutcome(
 )
 
 /**
- * UI callbacks used by [PairingSession.run]. Both are invoked on the caller's dispatcher
- * (Main in the app). The coroutine is cancelled when the user-interaction budget expires or
- * the peer aborts; implementations must dismiss their dialog on cancellation.
+ * UI callbacks used by [PairingSession.run]. Invoked on the caller's dispatcher (Main in the
+ * app). The coroutine is cancelled when the user-interaction budget expires or the peer aborts;
+ * implementations must dismiss their dialog on cancellation.
  */
 interface PairingPrompt {
     /** "Certificate changed for <name> — re-pair?". Return true to continue into the PIN flow. */
     suspend fun confirmCertificateChanged(peerName: String): Boolean
 
-    /** Show the PIN; return true for "Match", false for "Not matching". */
+    /** Listener side only: show the PIN and ask "Does <peerName> want to connect?". Return true
+     * for "Yes", false for "No". */
     suspend fun confirmPin(peerName: String, pin: String): Boolean
+
+    /** Dialer side only, and only after the listener has already approved: ask the user to type
+     * the code shown on the listener's screen. Returns the typed digits, or null if cancelled/
+     * declined. [PairingSession.run] does the comparison against the locally-derived expected
+     * PIN — this method never sees that value. */
+    suspend fun enterPin(peerName: String): String?
+
+    /** Listener side only, and only for an already-trusted peer that flagged its connection
+     * attempt as a manual (human-initiated) Connect: "<peerName> wants to connect. Allow?" No
+     * PIN involved — trust is already established; this just lets a human decline a surprise
+     * reconnect. Automatic background reconnects never reach this prompt. */
+    suspend fun confirmReconnect(peerName: String): Boolean
 }
 
 /** Thrown when the peer's revealed nonce does not match its earlier commitment. */
@@ -91,7 +104,11 @@ data class SessionTransport(
  */
 class PairingSession private constructor(
     private val socket: SSLSocket,
-    private val localCertificate: X509Certificate
+    private val localCertificate: X509Certificate,
+    /** True if this side called [connect] (dialed out); false if it came from
+     * [handshakeAccepted] (listening side). The two roles see different prompts during
+     * pairing: the listener sees/shows the PIN, the dialer types it. */
+    val isDialer: Boolean
 ) : Closeable {
     val peerFingerprint: String =
         IdentityStore.fingerprint(socket.session.peerCertificates[0] as X509Certificate)
@@ -163,7 +180,7 @@ class PairingSession private constructor(
                     if (tlsProtocols != null) socket.enabledProtocols = tlsProtocols
                     socket.soTimeout = NETWORK_TIMEOUT_MS
                     socket.startHandshake()
-                    PairingSession(socket, identity.first)
+                    PairingSession(socket, identity.first, isDialer = true)
                 } catch (e: Exception) {
                     closeQuickly(socket)
                     throw e
@@ -179,7 +196,7 @@ class PairingSession private constructor(
             try {
                 socket.soTimeout = NETWORK_TIMEOUT_MS
                 socket.startHandshake()
-                return PairingSession(socket, localCertificate)
+                return PairingSession(socket, localCertificate, isDialer = false)
             } catch (e: Exception) {
                 closeQuickly(socket)
                 throw e
@@ -199,6 +216,20 @@ class PairingSession private constructor(
         PairingProtocol.writeString(output, selfName)
         peerUuid = PairingProtocol.readString(input)
         peerName = PairingProtocol.readString(input)
+    }
+
+    /**
+     * Protocol step (new): each side announces whether this attempt is a human-initiated manual
+     * Connect, as opposed to an automatic background reconnect. Only the dialer's flag is ever
+     * meaningful — the listener always sends false (it never "manually Connects" within a
+     * single exchange) — so the return value is "did the peer request manual confirmation",
+     * read by whichever side needs it: the listener, when deciding whether to prompt before a
+     * trusted reconnect.
+     */
+    suspend fun exchangeManualIntent(isManualConnect: Boolean): Boolean = withContext(Dispatchers.IO) {
+        socket.soTimeout = NETWORK_TIMEOUT_MS
+        PairingProtocol.writeByte(output, if (isManualConnect) PairingProtocol.YES else PairingProtocol.NO)
+        PairingProtocol.readByte(input) == PairingProtocol.YES
     }
 
     /** Protocol step 3. Returns true only if BOTH sides trust each other. */
@@ -239,18 +270,69 @@ class PairingSession private constructor(
 
     /**
      * Runs the whole post-handshake protocol and writes the trust record only on mutual
-     * success. Identical on the initiator and listener side. Network/peer errors are reported
-     * through the returned outcome rather than thrown. Does not close the session on success;
-     * callers own it (`use {}`). On failure the socket is closed.
+     * success. Network/peer errors are reported through the returned outcome rather than
+     * thrown. Does not close the session on success; callers own it (`use {}`). On failure the
+     * socket is closed.
+     *
+     * The dialer and listener play different roles throughout (see [isDialer]): the listener
+     * always answers first (it is the one who sees the PIN, or who is asked "allow this
+     * reconnect?"); the dialer waits for that answer before showing anything of its own.
+     * [isManualConnect] is the dialer's only input to this asymmetry: pass true for a human-
+     * initiated Connect-button press, false (the default) for an automatic background
+     * reconnect, which must stay silent on both sides.
      */
-    suspend fun run(selfUuid: String, selfName: String, dao: PairedDeviceDao, prompt: PairingPrompt): PairingOutcome {
+    suspend fun run(
+        selfUuid: String,
+        selfName: String,
+        dao: PairedDeviceDao,
+        prompt: PairingPrompt,
+        isManualConnect: Boolean = false
+    ): PairingOutcome {
         val trust: PeerTrust
+        val peerRequestsConfirmation: Boolean
         val pin: String
         try {
             exchangeIdentity(selfUuid, selfName)
+            peerRequestsConfirmation = exchangeManualIntent(isManualConnect)
             val uuid = peerUuid!!
             trust = checkTrust(dao, uuid, peerFingerprint)
-            if (exchangeTrust(trust == PeerTrust.TRUSTED)) {
+            DebugLog.write("PairingSession.run: isDialer=$isDialer isManualConnect=$isManualConnect " +
+                "peerUuid=$uuid localTrust=$trust peerFingerprint=$peerFingerprint " +
+                "storedFingerprint=${dao.findByUuid(uuid)?.fingerprint}")
+            val mutuallyTrusted = exchangeTrust(trust == PeerTrust.TRUSTED)
+            DebugLog.write("PairingSession.run: mutuallyTrusted=$mutuallyTrusted")
+            if (mutuallyTrusted) {
+                // Both sides already trust each other: silent, UNLESS this is a manual Connect,
+                // in which case the listener gets one lightweight yes/no (no PIN — trust is
+                // already established) before finalizing. Automatic reconnects never reach this.
+                val needsConfirmation = if (isDialer) isManualConnect else peerRequestsConfirmation
+                if (needsConfirmation) {
+                    if (!isDialer) {
+                        val approved = try {
+                            withTimeoutOrNull(userTimeoutMs) { prompt.confirmReconnect(peerName!!) } ?: false
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            false
+                        }
+                        runCatching {
+                            withContext(Dispatchers.IO) {
+                                PairingProtocol.writeByte(output, if (approved) PairingProtocol.YES else PairingProtocol.NO)
+                            }
+                        }
+                        if (!approved) {
+                            close()
+                            return outcome(PairingResult.PAIRING_FAILED, "Declined on the other device.")
+                        }
+                    } else {
+                        val verdict = withContext(Dispatchers.IO) { PairingProtocol.readByte(input) }
+                        if (verdict != PairingProtocol.YES) {
+                            close()
+                            return outcome(PairingResult.PAIRING_FAILED, "The other device declined.")
+                        }
+                    }
+                }
+
                 val existing = dao.findByUuid(uuid)!!
                 dao.upsert(existing.copy(name = peerName!!, lastIp = peerIp))
                 return outcome(PairingResult.RECONNECTED, "Trusted reconnect.")
@@ -268,10 +350,13 @@ class PairingSession private constructor(
             return outcome(PairingResult.CONNECTION_FAILED, e.message ?: e.javaClass.simpleName)
         }
 
-        // Step 6: user confirmation, raced against the peer's answer so an early
-        // "Not matching" on the other device dismisses our dialog immediately.
+        // Step 6: user confirmation. Sequential by role, not raced: the listener (who sees the
+        // PIN) answers first; only if they approve does the dialer get prompted at all — to
+        // type the code, never to compare it visually. Same cryptographic guarantee as before
+        // (both sides must land on the same `pin`, derived from the committed nonce exchange
+        // earlier); only which side sees vs. types it changed.
         val confirmed = try {
-            confirmWithPeer(trust, pin, prompt)
+            if (!isDialer) confirmAsListener(trust, pin, prompt) else confirmAsDialer(trust, pin, prompt)
         } catch (e: CancellationException) {
             close()
             throw e
@@ -280,7 +365,7 @@ class PairingSession private constructor(
         }
         if (!confirmed) {
             close()
-            return outcome(PairingResult.PAIRING_FAILED, "PIN not confirmed on both devices.")
+            return outcome(PairingResult.PAIRING_FAILED, "PIN not confirmed.")
         }
 
         dao.upsert(PairedDevice(
@@ -293,23 +378,25 @@ class PairingSession private constructor(
         return outcome(PairingResult.PAIRED, "Paired.")
     }
 
-    private suspend fun confirmWithPeer(trust: PeerTrust, pin: String, prompt: PairingPrompt): Boolean =
+    /** Listener side: show the PIN and ask; race our own prompt against a read of the dialer's
+     * eventual answer. In the happy path the dialer never sends anything until it has read
+     * ours, so this read only resolves early if the dialer vanished/misbehaved — same early-
+     * cancel trick the old symmetric code used, just scoped to this side: a dead peer dismisses
+     * our stale dialog instead of making us sit out the full user timeout. */
+    private suspend fun confirmAsListener(trust: PeerTrust, pin: String, prompt: PairingPrompt): Boolean =
         coroutineScope {
-            // Covers the local prompt plus the wait for the peer; the explicit timeouts below
-            // are the real bounds, this only guarantees the blocking read cannot outlive them.
             socket.soTimeout = (2 * userTimeoutMs + NETWORK_TIMEOUT_MS).toInt()
-            val peerAnswer = async(Dispatchers.IO) { runCatching { PairingProtocol.readByte(input) } }
+            val dialerAnswer = async(Dispatchers.IO) { runCatching { PairingProtocol.readByte(input) } }
             val localAnswer = async {
                 withTimeoutOrNull(userTimeoutMs) { askUser(trust, pin, prompt) } ?: false
             }
 
-            val peerFirst = select {
-                peerAnswer.onAwait { true }
+            val dialerFirst = select {
+                dialerAnswer.onAwait { true }
                 localAnswer.onAwait { false }
             }
-            if (peerFirst && peerAnswer.await().getOrNull() != PairingProtocol.YES) {
-                localAnswer.cancel() // dismiss our dialog
-                runCatching { withContext(Dispatchers.IO) { PairingProtocol.writeByte(output, PairingProtocol.NO) } }
+            if (dialerFirst) {
+                localAnswer.cancel() // peer vanished/misbehaved before we even answered
                 close()
                 return@coroutineScope false
             }
@@ -321,14 +408,57 @@ class PairingSession private constructor(
                 }
             }.isSuccess
             if (!localMatch || !sent) {
-                close() // unblocks the pending peer read so this scope can complete
+                close() // unblocks the pending dialer-answer read so this scope can complete
                 return@coroutineScope false
             }
 
-            val peer = withTimeoutOrNull(userTimeoutMs) { peerAnswer.await() }
-            if (peer == null) close() // timed out: closing unblocks the read
-            peer?.getOrNull() == PairingProtocol.YES
+            val dialer = withTimeoutOrNull(userTimeoutMs) { dialerAnswer.await() }
+            if (dialer == null) close() // timed out: closing unblocks the read
+            dialer?.getOrNull() == PairingProtocol.YES
         }
+
+    /** Dialer side: wait for the listener's approval first — nothing is shown until then — then
+     * ask the user to type the code and compare it against our own locally-derived [pin]. */
+    private suspend fun confirmAsDialer(trust: PeerTrust, pin: String, prompt: PairingPrompt): Boolean {
+        socket.soTimeout = (2 * userTimeoutMs + NETWORK_TIMEOUT_MS).toInt()
+
+        if (trust == PeerTrust.CERTIFICATE_CHANGED) {
+            val certOk = try {
+                withTimeoutOrNull(userTimeoutMs) { prompt.confirmCertificateChanged(peerName ?: "Unknown device") } ?: false
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                false
+            }
+            if (!certOk) {
+                runCatching { withContext(Dispatchers.IO) { PairingProtocol.writeByte(output, PairingProtocol.NO) } }
+                close()
+                return false
+            }
+        }
+
+        val listenerAnswer = withContext(Dispatchers.IO) { runCatching { PairingProtocol.readByte(input) } }
+        if (listenerAnswer.getOrNull() != PairingProtocol.YES) {
+            close()
+            return false
+        }
+
+        val typed = try {
+            withTimeoutOrNull(userTimeoutMs) { prompt.enterPin(peerName ?: "Unknown device") }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+        val matches = typed == pin
+        val sent = runCatching {
+            withContext(Dispatchers.IO) {
+                PairingProtocol.writeByte(output, if (matches) PairingProtocol.YES else PairingProtocol.NO)
+            }
+        }.isSuccess
+        if (!matches || !sent) close()
+        return matches && sent
+    }
 
     private suspend fun askUser(trust: PeerTrust, pin: String, prompt: PairingPrompt): Boolean = try {
         val name = peerName ?: "Unknown device"

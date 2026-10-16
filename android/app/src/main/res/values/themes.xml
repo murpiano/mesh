@@ -1,5 +1,21 @@
 <resources>
-    <!-- MaterialComponents (a descendant of AppCompat) so Material widgets such as TabLayout get
-         the theme attributes they expect. -->
-    <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.DarkActionBar"/>
+    <!-- MaterialComponents (not DayNight) — the design is always dark, independent of the
+         system theme. NoActionBar since every screen uses its own header. -->
+    <style name="AppTheme" parent="Theme.MaterialComponents.NoActionBar">
+        <item name="android:windowBackground">@color/bg_screen</item>
+        <item name="colorPrimary">@color/bg_header</item>
+        <item name="colorPrimaryDark">@color/bg_header</item>
+        <item name="colorAccent">@color/status_online</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="android:statusBarColor">@color/bg_header</item>
+    </style>
+
+    <!-- Shared look for every AlertDialog (PinConfirmDialog): same lighter-than-screen popup
+         background and muted text as DarkPopup, so confirm/PIN/edit dialogs match the menus. -->
+    <style name="DarkAlertDialog" parent="Theme.MaterialComponents.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/popup_background</item>
+        <item name="android:textColorPrimary">@color/text_muted</item>
+        <item name="android:textColor">@color/text_muted</item>
+    </style>
 </resources>
