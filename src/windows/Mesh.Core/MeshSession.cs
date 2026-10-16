@@ -6,29 +6,24 @@ namespace Mesh.Core;
 public enum MeshSessionState { Connected, Disconnected, Reconnecting }
 
 /// <summary>
-/// A persistent, reconnecting channel to a paired peer, carrying framed <see cref="MeshMessage"/>
-/// traffic after the pairing handshake completes. Owns the transport from the point it is
-/// constructed (via <see cref="FromTransport"/>) until <see cref="Dispose"/>.
+/// A channel to a paired peer, carrying framed <see cref="MeshMessage"/> traffic after the
+/// pairing handshake completes. Owns the transport from the point it is constructed (via
+/// <see cref="FromTransport"/>) until <see cref="Dispose"/>.
 ///
-/// Reconnect scope note: this class only probes whether the peer's last-known IP:port is
-/// reachable again at the TCP level; it deliberately does NOT re-run the trusted-pairing
-/// handshake (that needs the local identity certificate and paired-device store path, which
-/// this class does not hold). Task 5 wires the UI layer to listen for
-/// <see cref="StateChanged"/> == Disconnected, re-run <c>PairingSession.ConnectAsync</c> +
-/// <c>IsPeerTrusted</c> + <c>DetachTransport</c> on success, and construct a fresh
-/// <see cref="MeshSession"/> via <see cref="FromTransport"/> to replace this one. Messages queued
-/// here while disconnected are carried over by calling <see cref="DrainPendingSendsAsync"/> on this
-/// (disposed) session and re-sending them through the replacement.
+/// This class only detects that the transport died (read/write failure, or no traffic within
+/// the idle timeout) and reports it via <see cref="StateChanged"/> == Disconnected; it does not
+/// reconnect itself. The owner (the UI layer) listens for that event and re-runs
+/// <c>PairingSession.ConnectAsync</c> + <c>IsPeerTrusted</c> + <c>DetachTransport</c> on success,
+/// constructing a fresh <see cref="MeshSession"/> via <see cref="FromTransport"/> to replace this
+/// one — the single reconnect loop and policy (dialer/passive tie-break, backoff) live there.
+/// Messages queued here while disconnected are carried over by calling
+/// <see cref="DrainPendingSendsAsync"/> on this (disposed) session and re-sending them through
+/// the replacement.
 /// </summary>
 public sealed class MeshSession : IDisposable
 {
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(45);
-    private static readonly TimeSpan[] BackoffSteps =
-    {
-        TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(8)
-    };
-    private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(30);
 
     public event Action<MeshMessage>? MessageReceived;
     public event Action<MeshSessionState>? StateChanged;
@@ -51,7 +46,6 @@ public sealed class MeshSession : IDisposable
     // (see State / TransitionTo) so concurrent transitions from the read/heartbeat/reconnect loops
     // and SendAsync never race on the field itself and never double-fire StateChanged.
     private int _stateValue = (int)MeshSessionState.Connected;
-    private int _reconnecting; // 0/1 guard so we don't start multiple reconnect loops concurrently
 
     /// <summary>Current connection state. Anything other than Connected means this session is dead
     /// for sending purposes until the owner replaces it (see the class remarks on reconnect).</summary>
@@ -87,6 +81,7 @@ public sealed class MeshSession : IDisposable
             heartbeatInterval ?? HeartbeatInterval, idleTimeout ?? IdleTimeout);
         if (onMessageReceived != null) session.MessageReceived += onMessageReceived;
         if (onStateChanged != null) session.StateChanged += onStateChanged;
+        DebugLog.Write($"FromTransport: new session for peer {peerUuid} at {peerIp}:{peerPort}");
         _ = session.RunReadLoopAsync(session._lifetimeCts.Token);
         _ = session.RunHeartbeatLoopAsync(session._lifetimeCts.Token);
         return session;
@@ -110,7 +105,6 @@ public sealed class MeshSession : IDisposable
             {
                 _pendingSend.Enqueue(message);
                 TransitionTo(MeshSessionState.Disconnected);
-                StartReconnectLoop();
             }
         }
         finally
@@ -163,6 +157,7 @@ public sealed class MeshSession : IDisposable
                 }
                 var message = await MeshMessage.ReadAsync(stream);
                 _lastReceivedAt = DateTimeOffset.UtcNow;
+                DebugLog.Write($"RunReadLoopAsync: received {message.GetType().Name}");
                 if (message is not HeartbeatMessage)
                     MessageReceived?.Invoke(message);
             }
@@ -170,12 +165,12 @@ public sealed class MeshSession : IDisposable
             {
                 return;
             }
-            catch
+            catch (Exception ex)
             {
+                DebugLog.Write($"RunReadLoopAsync: EXCEPTION {ex.GetType().Name}: {ex.Message}");
                 if (ct.IsCancellationRequested) return;
                 TransitionTo(MeshSessionState.Disconnected);
-                StartReconnectLoop();
-                // Avoid a tight failure spin while a reconnect attempt is (or isn't) running.
+                // Avoid a tight failure spin while the owner's reconnect orchestration catches up.
                 try { await Task.Delay(TimeSpan.FromMilliseconds(500), ct); }
                 catch (OperationCanceledException) { return; }
             }
@@ -197,8 +192,8 @@ public sealed class MeshSession : IDisposable
             // gate this on a successful lock acquisition.
             if (DateTimeOffset.UtcNow - _lastReceivedAt > _idleTimeout)
             {
+                DebugLog.Write($"RunHeartbeatLoopAsync: idle timeout, lastReceivedAt={_lastReceivedAt:HH:mm:ss.fff}");
                 TransitionTo(MeshSessionState.Disconnected);
-                StartReconnectLoop();
                 continue;
             }
 
@@ -223,77 +218,16 @@ public sealed class MeshSession : IDisposable
             {
                 await MeshMessage.WriteAsync(_stream, new HeartbeatMessage());
             }
-            catch
+            catch (Exception ex)
             {
+                DebugLog.Write($"TrySendHeartbeatAsync: write failed {ex.GetType().Name}: {ex.Message}");
                 TransitionTo(MeshSessionState.Disconnected);
-                StartReconnectLoop();
             }
         }
         finally
         {
             _sendLock.Release();
         }
-    }
-
-    private void StartReconnectLoop()
-    {
-        if (Interlocked.CompareExchange(ref _reconnecting, 1, 0) == 0)
-        {
-            _ = ReconnectLoopAsync(_lifetimeCts.Token);
-        }
-    }
-
-    private async Task ReconnectLoopAsync(CancellationToken ct)
-    {
-        try
-        {
-            TransitionTo(MeshSessionState.Reconnecting);
-            var attempt = 0;
-            while (!ct.IsCancellationRequested)
-            {
-                attempt++;
-                var ip = _peerIp;
-                if (attempt == 5)
-                {
-                    // After 4 direct-IP attempts, try one mDNS re-discovery pass.
-                    var rediscovered = await TryRediscoverIpAsync(ct);
-                    if (rediscovered != null) ip = _peerIp = rediscovered;
-                }
-
-                try
-                {
-                    // Reconnect here only probes that the already-trusted peer's transport is
-                    // reachable again; it intentionally does not repeat the PIN/trust protocol.
-                    using var probe = new TcpClient();
-                    await probe.ConnectAsync(ip, _peerPort, ct);
-                    // NOTE: full reconnect (TLS re-handshake against the pinned fingerprint) is
-                    // wired through PairingSession.ConnectAsync + trusted-check by the caller that
-                    // owns identity/paired-store paths; this class only establishes that the
-                    // transport is reachable again. See Task 5 for how the UI layer re-runs the
-                    // trusted-reconnect handshake and calls a new FromTransport on success.
-                    return; // Signal: caller (Task 5 UI wiring) must re-run trusted handshake and replace this session.
-                }
-                catch
-                {
-                    if (ct.IsCancellationRequested) return;
-                    var delay = attempt <= BackoffSteps.Length ? BackoffSteps[attempt - 1] : MaxBackoff;
-                    try { await Task.Delay(delay, ct); } catch (OperationCanceledException) { return; }
-                }
-            }
-        }
-        finally
-        {
-            Interlocked.Exchange(ref _reconnecting, 0);
-        }
-    }
-
-    private Task<string?> TryRediscoverIpAsync(CancellationToken ct)
-    {
-        // Left as a hook: a full mDNS re-discovery pass needs a running MeshDiscovery instance,
-        // which this class does not own. Task 5's UI-layer reconnect orchestration performs
-        // the actual re-discovery and passes a fresh IP back in; this returns null here so the
-        // backoff loop simply keeps retrying the last-known IP if nothing calls in with a new one.
-        return Task.FromResult<string?>(null);
     }
 
     private void TransitionTo(MeshSessionState state)

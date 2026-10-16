@@ -47,7 +47,7 @@ public class MeshSessionTests
         {
             const int count = 20;
             for (var i = 0; i < count; i++)
-                await server.SendAsync(new ClipboardPushMessage(DateTimeOffset.UtcNow, $"clip-{i}"));
+                await server.SendAsync(new ChatSendMessage(Guid.NewGuid().ToString(), DateTimeOffset.UtcNow, $"clip-{i}"));
             await Task.Delay(300); // let the frames land in the client's receive buffer
 
             var received = new ConcurrentQueue<string>();
@@ -56,7 +56,7 @@ public class MeshSessionTests
                 "peer-uuid-server", "127.0.0.1", 51895,
                 onMessageReceived: msg =>
                 {
-                    if (msg is ClipboardPushMessage push) received.Enqueue(push.Text);
+                    if (msg is ChatSendMessage push) received.Enqueue(push.Text);
                     if (received.Count == count) gotAll.TrySetResult();
                 });
 
@@ -99,10 +99,10 @@ public class MeshSessionTests
             var received = new TaskCompletionSource<MeshMessage>();
             client.MessageReceived += msg => received.TrySetResult(msg);
 
-            await server.SendAsync(new ClipboardPushMessage(DateTimeOffset.UtcNow, "hi from server"));
+            await server.SendAsync(new ChatSendMessage(Guid.NewGuid().ToString(), DateTimeOffset.UtcNow, "hi from server"));
 
             var result = await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            var push = Assert.IsType<ClipboardPushMessage>(result);
+            var push = Assert.IsType<ChatSendMessage>(result);
             Assert.Equal("hi from server", push.Text);
         }
         finally { server.Dispose(); client.Dispose(); }
@@ -141,14 +141,14 @@ public class MeshSessionTests
             await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             // Sent during the disconnect window: must be queued, not written or dropped.
-            await oldClient.SendAsync(new ClipboardPushMessage(DateTimeOffset.UtcNow, "first"));
-            await oldClient.SendAsync(new ClipboardPushMessage(DateTimeOffset.UtcNow, "second"));
+            await oldClient.SendAsync(new ChatSendMessage(Guid.NewGuid().ToString(), DateTimeOffset.UtcNow, "first"));
+            await oldClient.SendAsync(new ChatSendMessage(Guid.NewGuid().ToString(), DateTimeOffset.UtcNow, "second"));
 
             // Replace the dead session the way the UI layer does: dispose, drain, re-send.
             oldClient.Dispose();
             var pending = await oldClient.DrainPendingSendsAsync();
             Assert.Equal(new[] { "first", "second" },
-                pending.Cast<ClipboardPushMessage>().Select(m => m.Text));
+                pending.Cast<ChatSendMessage>().Select(m => m.Text));
             Assert.Empty(await oldClient.DrainPendingSendsAsync()); // queue really was emptied
 
             (newServer, newClient) = await CreatePairAsync(51894);
@@ -156,7 +156,7 @@ public class MeshSessionTests
             var gotBoth = new TaskCompletionSource();
             newServer.MessageReceived += msg =>
             {
-                if (msg is ClipboardPushMessage push) received.Enqueue(push.Text);
+                if (msg is ChatSendMessage push) received.Enqueue(push.Text);
                 if (received.Count == 2) gotBoth.TrySetResult();
             };
 

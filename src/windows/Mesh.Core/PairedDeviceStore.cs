@@ -44,4 +44,16 @@ public static class PairedDeviceStore
             Save(path, devices);
         }
     }
+
+    /// <summary>Removes the local trust record for <paramref name="uuid"/>, if any. Local-only:
+    /// the peer's own record of us is untouched, so it still shows us as paired until it next
+    /// tries to connect and our (now-missing) record forces a fresh PIN pairing.</summary>
+    public static void Remove(string path, string uuid)
+    {
+        lock (WriteLock)
+        {
+            var devices = Load(path);
+            if (devices.RemoveAll(d => d.Uuid == uuid) > 0) Save(path, devices);
+        }
+    }
 }
