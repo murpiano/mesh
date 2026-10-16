@@ -32,7 +32,7 @@ The PC stores messages in SQLite, the phone in Room, both capped at 50 per peer.
 
 ## Run locally
 
-Every [release](https://github.com/murpiano/mesh/releases) carries both apps ready to run: the Android APK and the Windows desktop app as one `.exe` that needs no .NET install. The release APK is signed with a different key than debug builds, so a phone with a debug build has to uninstall it first and pair again; the chat comes back from the PC.
+Every [release](https://github.com/murpiano/mesh/releases) carries both apps ready to run: the Android APK and the Windows desktop app as one `.exe` that needs no .NET install.
 
 To build from source:
 
@@ -50,7 +50,9 @@ cd android
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The phone needs Android 8.0 (API 26) or newer, and both devices need to be on the same network. The desktop app keeps its identity, paired devices and chat in `%AppData%\Mesh`. Debug builds are signed with the committed `android/app/debug.keystore`, so an APK built on any machine installs over an existing one.
+The phone needs Android 8.0 (API 26) or newer, and both devices need to be on the same network. The desktop app keeps its identity, paired devices and chat in `%AppData%\Mesh`.
+
+A debug build is a separate app next to the release one: Mesh Dev (`com.mesh.debug`) on the phone, and `%AppData%\Mesh Dev` instead of `%AppData%\Mesh` on the PC. It has its own identity, pairings and chat, and other devices see it with "(dev)" after its name, so the release apps you use every day stay untouched while you work on the code. Debug APKs are signed with the committed `android/app/debug.keystore`, so one built on any machine installs over Mesh Dev.
 
 Tests live in `src/windows/Mesh.Tests` (xUnit) and `android/app/src/test`. They write only to temporary folders; the discovery tests advertise a short-lived test service over mDNS. `.github/workflows/ci.yml` runs the Windows tests and builds the desktop app on Windows, and runs the Android unit tests and builds the APK on Linux, for every push to `master` and every pull request.
 
