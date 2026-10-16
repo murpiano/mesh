@@ -32,6 +32,10 @@ The PC stores messages in SQLite, the phone in Room, both capped at 50 per peer.
 
 ## Run locally
 
+Every [release](https://github.com/murpiano/mesh/releases) carries both apps ready to run: the Android APK and the Windows desktop app as one `.exe` that needs no .NET install. The release APK is signed with a different key than debug builds, so a phone with a debug build has to uninstall it first and pair again; the chat comes back from the PC.
+
+To build from source:
+
 ```bash
 git clone https://github.com/murpiano/mesh.git
 cd mesh
