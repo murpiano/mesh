@@ -145,4 +145,20 @@ public class MeshMessageTests
 
         await Assert.ThrowsAsync<InvalidDataException>(() => MeshMessage.ReadAsync(stream));
     }
+
+    [Fact]
+    public async Task ChatSend_TextOfMaxChars_SurvivesTheWire()
+    {
+        // The limit both apps show the user is in characters, the wire limit is in bytes. A text
+        // at the character limit has to fit the byte limit even when every character is a 3-byte
+        // one, or a message one side offers to send is one the other side drops.
+        var text = new string('中', MeshMessage.MaxTextChars);
+        using var stream = new MemoryStream();
+
+        await MeshMessage.WriteAsync(stream, new ChatSendMessage("msg-1", DateTimeOffset.UtcNow, text));
+        stream.Position = 0;
+        var received = Assert.IsType<ChatSendMessage>(await MeshMessage.ReadAsync(stream));
+
+        Assert.Equal(text.Length, received.Text.Length);
+    }
 }

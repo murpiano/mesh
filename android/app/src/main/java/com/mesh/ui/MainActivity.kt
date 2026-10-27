@@ -38,9 +38,9 @@ import java.util.UUID
  */
 class MainActivity : AppCompatActivity(), PairingPrompt {
     companion object {
-        /** Chat texts longer than this (4 MiB of chars) are neither stored nor sent. Mirrors
-         * MeshMessage.MAX_TEXT_BYTES' header room (worst case 3 bytes/char in UTF-8). */
-        private const val MAX_CHAT_TEXT_LENGTH = 4 * 1_048_576
+        /** Chat texts longer than this are neither stored nor sent. Shared with the desktop app
+         * through MeshMessage, so both ends draw the line in the same place. */
+        private const val MAX_CHAT_TEXT_LENGTH = MeshMessage.MAX_TEXT_CHARS
     }
 
     private enum class ReconnectAttemptResult { RECONNECTED, FAILED, TRUST_LOST }
@@ -767,7 +767,11 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
     /** Send button: stores the message locally, re-renders, then pushes it to the peer. Only
      * called while [peerUuid] is active — [ChatFragment] disables Send otherwise. */
     internal fun sendChatMessage(peerUuid: String, text: String) {
-        if (text.isEmpty() || text.length > MAX_CHAT_TEXT_LENGTH) return
+        if (text.isEmpty()) return
+        if (text.length > MAX_CHAT_TEXT_LENGTH) {
+            Toast.makeText(this, "Message too long", Toast.LENGTH_LONG).show()
+            return
+        }
         val session = meshSession?.takeIf { meshPeerUuid == peerUuid } ?: return
         val selfId = selfUuid ?: return
         lifecycleScope.launch {
