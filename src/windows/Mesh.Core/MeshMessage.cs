@@ -21,6 +21,14 @@ public abstract class MeshMessage
     /// </summary>
     public const int MaxTextBytes = 4 * 1_048_576;
 
+    /// <summary>
+    /// Upper bound on a chat message's length in UTF-16 code units — what both apps check before
+    /// storing or sending, so neither offers to send what the other would drop. Derived from
+    /// <see cref="MaxTextBytes"/> rather than written out, because a text this long always fits
+    /// the wire limit (see the 3-bytes-per-code-unit worst case above).
+    /// </summary>
+    public const int MaxTextChars = MaxTextBytes / 4;
+
     /// <summary>Upper bound on how many entries a single history sync carries. Generous relative
     /// to the 50-per-peer cap each side actually stores, so a sync can never be truncated.</summary>
     public const int MaxHistorySyncEntries = 1000;

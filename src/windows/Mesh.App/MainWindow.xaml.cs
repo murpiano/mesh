@@ -30,8 +30,9 @@ public partial class MainWindow : Window, IPairingPrompt
     private readonly string _pairedDevicesPath = Path.Combine(MeshDir, "paired_devices.json");
     private readonly string _chatDbPath = Path.Combine(MeshDir, "chat_history.db");
 
-    /// <summary>Chat message texts longer than this (1 MiB of chars) are neither stored nor sent.</summary>
-    private const int MaxChatTextLength = 1_048_576;
+    /// <summary>Chat message texts longer than this are neither stored nor sent. Shared with the
+    /// phone app through Mesh.Core, so both ends draw the line in the same place.</summary>
+    private const int MaxChatTextLength = MeshMessage.MaxTextChars;
 
     /// <summary>Delays between UI-level trusted-reconnect attempts after a session drops.</summary>
     private static readonly TimeSpan[] MeshReconnectBackoff =

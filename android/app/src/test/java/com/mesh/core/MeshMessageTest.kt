@@ -151,4 +151,18 @@ class MeshMessageTest {
             MeshMessage.read(DataInputStream(ByteArrayInputStream(out.toByteArray())))
         }
     }
+
+    @Test
+    fun `chat send text of max chars survives the wire`() {
+        // The limit both apps show the user is in characters, the wire limit is in bytes. A text
+        // at the character limit has to fit the byte limit even when every character is a 3-byte
+        // one, or a message one side offers to send is one the other side drops.
+        val text = "中".repeat(MeshMessage.MAX_TEXT_CHARS)
+        val out = ByteArrayOutputStream()
+
+        MeshMessage.write(DataOutputStream(out), ChatSend("msg-1", 42L, text))
+        val received = MeshMessage.read(DataInputStream(ByteArrayInputStream(out.toByteArray())))
+
+        assertEquals(text.length, (received as ChatSend).text.length)
+    }
 }

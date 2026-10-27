@@ -11,7 +11,7 @@ Mesh links a Windows PC and an Android phone on the same local network so they c
 
 ## What you can do
 
-Open Mesh on both devices and they find each other on the network. Right-click a device on the PC, or hold it on the phone, and pick Connect. The first time, the receiving device shows a 6-digit code and asks to allow the connection, and the other device types that code in. After that, Connect only asks the other side to allow it. Click a device to open its chat: send text, copy any message, edit or delete your own. Edits and deletes show up on both devices. Each device keeps the last 50 messages per peer, and a message from the PC can be up to 1,048,576 characters long.
+Open Mesh on both devices and they find each other on the network. Right-click a device on the PC, or hold it on the phone, and pick Connect. The first time, the receiving device shows a 6-digit code and asks to allow the connection, and the other device types that code in. After that, Connect only asks the other side to allow it. Click a device to open its chat: send text, copy any message, edit or delete your own. Edits and deletes show up on both devices. Each device keeps the last 50 messages per peer, and a message can be up to 1,048,576 characters long.
 
 ## How it works
 
@@ -79,7 +79,6 @@ The protocol code exists twice, once per platform, and the two copies are kept i
 - Edits and deletes are sent only while the peer is connected. Made offline, they stay local.
 - Unpairing is local. The other device still lists the pair until it next tries to connect.
 - The "+" menu in the chat (Image, File) and the explorer tab do nothing yet: there is no file transfer.
-- The phone accepts messages four times longer than the PC does. A message over 1,048,576 characters sent from the phone never shows up on the PC.
 - No iOS or macOS version.
 
 ---

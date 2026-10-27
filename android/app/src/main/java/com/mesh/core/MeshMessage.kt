@@ -36,6 +36,14 @@ sealed class MeshMessage {
          */
         const val MAX_TEXT_BYTES = 4 * 1_048_576
 
+        /**
+         * Upper bound on a chat message's length in UTF-16 code units — what both apps check
+         * before storing or sending, so neither offers to send what the other would drop.
+         * Derived from [MAX_TEXT_BYTES] rather than written out, because a text this long always
+         * fits the wire limit (see the 3-bytes-per-code-unit worst case above).
+         */
+        const val MAX_TEXT_CHARS = MAX_TEXT_BYTES / 4
+
         /** Generous relative to the 50-per-peer cap each side actually stores, so a sync can
          * never be truncated. */
         const val MAX_HISTORY_SYNC_ENTRIES = 1000
