@@ -44,6 +44,7 @@ class DeviceFragment : Fragment(R.layout.fragment_device) {
         view.findViewById<TextView>(R.id.deviceNameText).text = peerName
         view.findViewById<View>(R.id.backButton).setOnClickListener { mainActivity.openDevicesPage() }
         view.findViewById<View>(R.id.meshTitle).setOnClickListener { mainActivity.openDevicesPage() }
+        view.findViewById<View>(R.id.settingsButton).setOnClickListener { mainActivity.openSettingsPage() }
 
         statusStripe = view.findViewById(R.id.connectionStatusStripe)
         statusLabel = view.findViewById(R.id.connectionStatusLabel)
@@ -75,15 +76,13 @@ class DeviceFragment : Fragment(R.layout.fragment_device) {
         val fragment = if (section == Section.CHAT) ChatFragment.newInstance(peerUuid) else ExplorerFragment()
         childFragmentManager.beginTransaction().replace(R.id.deviceChildContainer, fragment).commit()
 
-        chatTab?.setBackgroundColor(tabColor(section == Section.CHAT))
-        explorerTab?.setBackgroundColor(tabColor(section == Section.EXPLORER))
+        // isActivated, not a background colour: tab_selector carries both the open tab's colour
+        // and the ripple, and a colour set here would hide them.
+        chatTab?.isActivated = section == Section.CHAT
+        explorerTab?.isActivated = section == Section.EXPLORER
         chatLabel?.setTextColor(sectionColor(section == Section.CHAT))
         explorerLabel?.setTextColor(sectionColor(section == Section.EXPLORER))
     }
-
-    /** Active tab reads as a darker patch of its own — no underline, per design feedback. */
-    private fun tabColor(active: Boolean) =
-        requireContext().getColor(if (active) R.color.bg_screen else R.color.bg_header)
 
     private fun sectionColor(active: Boolean) =
         requireContext().getColor(if (active) R.color.text_primary else R.color.text_secondary)

@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -14,6 +15,7 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.security.PrivateKey
 import java.security.cert.X509Certificate
 import java.util.concurrent.Executors
@@ -133,6 +135,9 @@ class PairingSession private constructor(
         const val NETWORK_TIMEOUT_MS = 10_000
         const val DEFAULT_USER_TIMEOUT_MS = 60_000L
         private const val CLOSE_TIMEOUT_MS = 1_000
+
+        /** How often [promptUntilPeerLeaves] looks at the socket while a prompt is up. */
+        private const val PEER_WATCH_POLL_MS = 200
 
         private val closer = Executors.newCachedThreadPool { r ->
             Thread(r, "mesh-session-close").apply { isDaemon = true }
@@ -269,24 +274,75 @@ class PairingSession private constructor(
         checkTrust(dao, uuid, peerFingerprint) == PeerTrust.TRUSTED
 
     /**
-     * Runs the whole post-handshake protocol and writes the trust record only on mutual
-     * success. Network/peer errors are reported through the returned outcome rather than
-     * thrown. Does not close the session on success; callers own it (`use {}`). On failure the
-     * socket is closed.
+     * Shows a prompt the peer is not expected to interrupt, and gives it up the moment the peer
+     * hangs up: a Connect called off on the other device closes the socket, and this is what
+     * turns that into the dialog disappearing here instead of sitting out the whole
+     * user-interaction budget — and, worse, finishing a pairing the other side has already
+     * walked away from. Returns what the prompt returned, plus whether it was the peer leaving
+     * that ended it.
      *
-     * The dialer and listener play different roles throughout (see [isDialer]): the listener
-     * always answers first (it is the one who sees the PIN, or who is asked "allow this
-     * reconnect?"); the dialer waits for that answer before showing anything of its own.
-     * [isManualConnect] is the dialer's only input to this asymmetry: pass true for a human-
-     * initiated Connect-button press, false (the default) for an automatic background
-     * reconnect, which must stay silent on both sides.
+     * The watch reads the socket with a short SO_TIMEOUT and puts back (mark/reset) anything it
+     * did read, so a byte the peer sent stays in the stream for the protocol step that expects
+     * it. It is always joined before this returns, so it can never race the reads that follow.
+     * Only usable where the peer sends nothing while we prompt (the trusted-reconnect confirm
+     * and the dialer's code entry). Mirrors PromptUntilPeerLeavesAsync in PairingSession.cs.
      */
+    private suspend fun <T> promptUntilPeerLeaves(onPeerLeft: T, prompt: suspend () -> T): Pair<T, Boolean> =
+        coroutineScope {
+            val promptJob = async { withTimeoutOrNull(userTimeoutMs) { prompt() } }
+            val watchJob = async(Dispatchers.IO) { watchPeerLeaving() }
+            val peerLeft = select {
+                promptJob.onAwait { false }
+                watchJob.onAwait { it }
+            }
+            if (peerLeft) {
+                promptJob.cancel()
+                return@coroutineScope onPeerLeft to true
+            }
+            watchJob.cancel()
+            watchJob.join()
+            (promptJob.await() ?: onPeerLeft) to false
+        }
+
+    /** True once the peer has hung up; false if this watch was cancelled first. */
+    private suspend fun watchPeerLeaving(): Boolean = coroutineScope {
+        val previousTimeout = runCatching { socket.soTimeout }.getOrDefault(0)
+        try {
+            while (isActive) {
+                runCatching { socket.soTimeout = PEER_WATCH_POLL_MS }
+                input.mark(1)
+                val read = try {
+                    input.read()
+                } catch (e: SocketTimeoutException) {
+                    continue
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    return@coroutineScope true // socket already gone
+                }
+                if (read < 0) return@coroutineScope true // the peer closed its end
+                // The peer is not expected to say anything here; put it back for whichever
+                // protocol step does expect it.
+                runCatching { input.reset() }
+                return@coroutineScope false
+            }
+            false
+        } finally {
+            runCatching { socket.soTimeout = previousTimeout }
+        }
+    }
+
     suspend fun run(
         selfUuid: String,
         selfName: String,
         dao: PairedDeviceDao,
         prompt: PairingPrompt,
-        isManualConnect: Boolean = false
+        isManualConnect: Boolean = false,
+        // The blacklist check, as a callback so this file stays free of the blocked-device
+        // store. Asked once the peer has said who it is and before anything is decided about
+        // it: a blocked peer is simply hung up on, with no prompt on either side. Mirrors
+        // isBlocked in PairingSession.cs.
+        isBlocked: (suspend (String) -> Boolean)? = null
     ): PairingOutcome {
         val trust: PeerTrust
         val peerRequestsConfirmation: Boolean
@@ -295,6 +351,9 @@ class PairingSession private constructor(
             exchangeIdentity(selfUuid, selfName)
             peerRequestsConfirmation = exchangeManualIntent(isManualConnect)
             val uuid = peerUuid!!
+            if (isBlocked != null && isBlocked(uuid)) {
+                return outcome(PairingResult.PAIRING_FAILED, "Blocked.")
+            }
             trust = checkTrust(dao, uuid, peerFingerprint)
             DebugLog.write("PairingSession.run: isDialer=$isDialer isManualConnect=$isManualConnect " +
                 "peerUuid=$uuid localTrust=$trust peerFingerprint=$peerFingerprint " +
@@ -308,12 +367,21 @@ class PairingSession private constructor(
                 val needsConfirmation = if (isDialer) isManualConnect else peerRequestsConfirmation
                 if (needsConfirmation) {
                     if (!isDialer) {
-                        val approved = try {
-                            withTimeoutOrNull(userTimeoutMs) { prompt.confirmReconnect(peerName!!) } ?: false
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            false
+                        // The dialer sends nothing until it has read our answer, so anything
+                        // readable here means it hung up — the user called the Connect off on
+                        // that device, and this prompt has to go with it.
+                        val (approved, peerLeft) = promptUntilPeerLeaves(false) {
+                            try {
+                                prompt.confirmReconnect(peerName!!)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                false
+                            }
+                        }
+                        if (peerLeft) {
+                            close()
+                            return outcome(PairingResult.PAIRING_FAILED, "The other device cancelled.")
                         }
                         runCatching {
                             withContext(Dispatchers.IO) {
@@ -443,12 +511,20 @@ class PairingSession private constructor(
             return false
         }
 
-        val typed = try {
-            withTimeoutOrNull(userTimeoutMs) { prompt.enterPin(peerName ?: "Unknown device") }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            null
+        // The listener has had its say and is now waiting on us, so again anything readable
+        // means it hung up while we were typing.
+        val (typed, listenerLeft) = promptUntilPeerLeaves<String?>(null) {
+            try {
+                prompt.enterPin(peerName ?: "Unknown device")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+        }
+        if (listenerLeft) {
+            close()
+            return false
         }
         val matches = typed == pin
         val sent = runCatching {

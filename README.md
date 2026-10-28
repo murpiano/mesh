@@ -11,7 +11,7 @@ Mesh links a Windows PC and an Android phone on the same local network so they c
 
 ## What you can do
 
-Open Mesh on both devices and they find each other on the network. Right-click a device on the PC, or hold it on the phone, and pick Connect. The first time, the receiving device shows a 6-digit code and asks to allow the connection, and the other device types that code in. After that, Connect only asks the other side to allow it. Click a device to open its chat: send text, copy any message, edit or delete your own. Edits and deletes show up on both devices. Each device keeps the last 50 messages per peer, and a message can be up to 1,048,576 characters long.
+Open Mesh on both devices and they find each other on the network. Every device in the list carries a switch: flick it on to connect, off to drop the connection or call off one still being made. The first time, the receiving device shows a 6-digit code and asks to allow the connection, and the other device types that code in. After that, the switch only asks the other side to allow it. Right-click a device on the PC, or hold it on the phone, to unpair it or blacklist it — a blacklisted device leaves the list and every connection it tries is refused, until it is let back in from the gear's Settings screen. Click a device to open its chat: send text, copy any message, edit or delete your own. Edits and deletes show up on both devices. Each device keeps the last 50 messages per peer, and a message can be up to 1,048,576 characters long.
 
 ## How it works
 
@@ -25,7 +25,7 @@ Every device creates its own self-signed RSA 2048 certificate on first launch an
 
 ### Connection
 
-After pairing, the same TLS socket becomes a long-lived session (`MeshSession`). Each side sends a heartbeat every 20 seconds and treats 45 seconds of silence as a drop. Reconnects are driven by the app (the window on the PC, the activity on the phone) and run with backoff of 1, 2, 4, 8, 16 and then 30 seconds. To keep both devices from dialing each other at once, only the one with the lower device id dials right away; the other waits 120 seconds and then tries every 45. A manual Disconnect sends a goodbye message so the peer stops reconnecting too. On the phone, a foreground service keeps the process alive while a session is open, otherwise Android would cut its network once the app is in the background.
+After pairing, the same TLS socket becomes a long-lived session (`MeshSession`). Each side sends a heartbeat every 10 seconds and treats 25 seconds of silence as a drop, so a link that dies without a word — a VPN tunnel closing, a device leaving the network — stops reading as connected within half a minute. Reconnects are driven by the app (the window on the PC, the activity on the phone) and run with backoff of 1, 2, 4, 8, 16 and then 30 seconds. To keep both devices from dialing each other at once, only the one with the lower device id dials right away; the other waits 120 seconds and then tries every 45. A manual Disconnect sends a goodbye message so the peer stops reconnecting too. On the phone, a foreground service keeps the process alive while a session is open, otherwise Android would cut its network once the app is in the background.
 
 ### Chat history
 

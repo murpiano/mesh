@@ -17,6 +17,8 @@
 
         <TextView
             android:id="@+id/meshTitle"
+            android:background="@drawable/ripple_rounded"
+            android:padding="6dp"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -54,6 +56,8 @@
 
         <Button
             android:id="@+id/refreshButton"
+            android:background="@drawable/ripple_rounded"
+            android:padding="6dp"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Refresh"/>
@@ -105,7 +109,14 @@
                 android:textStyle="bold"
                 android:textSize="13sp"/>
 
+            <!-- Empty, as wide as a row's 0/1 switch with its margins, so "State" below keeps
+                 sitting over the state column. -->
+            <View
+                android:layout_width="62dp"
+                android:layout_height="1dp"/>
+
             <TextView
+                android:id="@+id/stateHeaderColumn"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="State"

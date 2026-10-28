@@ -28,6 +28,7 @@ public partial class MainWindow : Window, IPairingPrompt
 {
     private static readonly string MeshDir = MeshApp.DataDir;
     private readonly string _pairedDevicesPath = Path.Combine(MeshDir, "paired_devices.json");
+    private readonly string _blockedDevicesPath = Path.Combine(MeshDir, "blocked_devices.json");
     private readonly string _chatDbPath = Path.Combine(MeshDir, "chat_history.db");
 
     /// <summary>Chat message texts longer than this are neither stored nor sent. Shared with the
@@ -74,6 +75,8 @@ public partial class MainWindow : Window, IPairingPrompt
     // merged with PairedDeviceStore (on disk) into _deviceRows, the unified list the UI binds to.
     private readonly Dictionary<string, DiscoveredDevice> _discovered = new();
     private readonly ObservableCollection<DeviceRow> _deviceRows = new();
+    // The Settings page's blacklist, same "replace, don't mutate" convention as _deviceRows.
+    private readonly ObservableCollection<BlockedDevice> _blockedRows = new();
     private readonly X509Certificate2 _identity;
     private readonly string _selfUuid;
     private readonly string _selfName = Environment.MachineName + MeshApp.DeviceNameSuffix;
@@ -91,6 +94,8 @@ public partial class MainWindow : Window, IPairingPrompt
     // The device row / chat message whose popup is open, highlighted until it closes.
     private string? _highlightedDeviceUuid;
     private string? _highlightedMsgId;
+    // The bubble holding a text selection, so a click elsewhere can drop it.
+    private TextBox? _selectionBubble;
 
     // All pairing work is marshalled onto the UI thread, so a plain flag is enough to keep
     // a double-click or an incoming connection from racing an attempt already in flight.
@@ -175,6 +180,7 @@ public partial class MainWindow : Window, IPairingPrompt
         InitializeComponent();
         Title = MeshApp.Name;
         DeviceListBox.ItemsSource = _deviceRows;
+        BlockedListBox.ItemsSource = _blockedRows;
         ChatListBox.ItemsSource = _chatRows;
         _popup = new DarkPopup(PopupLayer);
         _toastTimer.Tick += (_, _) =>
@@ -216,6 +222,7 @@ public partial class MainWindow : Window, IPairingPrompt
         _openPeerUuid = uuid;
         DeviceNameText.Text = name;
         DevicesPage.Visibility = Visibility.Collapsed;
+        SettingsPage.Visibility = Visibility.Collapsed;
         DevicePage.Visibility = Visibility.Visible;
         ChatInputBox.Clear();
         SelectSection(Section.Chat);
@@ -230,16 +237,31 @@ public partial class MainWindow : Window, IPairingPrompt
         _openPeerUuid = null;
         _chatRows.Clear();
         DevicePage.Visibility = Visibility.Collapsed;
+        SettingsPage.Visibility = Visibility.Collapsed;
         DevicesPage.Visibility = Visibility.Visible;
     }
+
+    /// <summary>The gear: the Settings page, which so far holds the blacklist.</summary>
+    private void OpenSettingsPage()
+    {
+        _popup.Dismiss();
+        _openPeerUuid = null;
+        _chatRows.Clear();
+        RebuildBlockedRows();
+        DevicePage.Visibility = Visibility.Collapsed;
+        DevicesPage.Visibility = Visibility.Collapsed;
+        SettingsPage.Visibility = Visibility.Visible;
+    }
+
+    private void GearButton_Click(object sender, RoutedEventArgs e) => OpenSettingsPage();
 
     private void MeshTitle_Click(object sender, RoutedEventArgs e) => OpenDevicesPage();
 
     private void BackButton_Click(object sender, RoutedEventArgs e) => OpenDevicesPage();
 
-    private void ChatSectionTab_Click(object sender, MouseButtonEventArgs e) => SelectSection(Section.Chat);
+    private void ChatSectionTab_Click(object sender, RoutedEventArgs e) => SelectSection(Section.Chat);
 
-    private void ExplorerSectionTab_Click(object sender, MouseButtonEventArgs e) => SelectSection(Section.Explorer);
+    private void ExplorerSectionTab_Click(object sender, RoutedEventArgs e) => SelectSection(Section.Explorer);
 
     /// <summary>The active section tab reads as a darker patch with brighter text — no underline.</summary>
     private void SelectSection(Section section)
@@ -247,20 +269,24 @@ public partial class MainWindow : Window, IPairingPrompt
         _popup.Dismiss();
         ChatSection.Visibility = section == Section.Chat ? Visibility.Visible : Visibility.Collapsed;
         ExplorerSection.Visibility = section == Section.Explorer ? Visibility.Visible : Visibility.Collapsed;
-        ChatSectionTab.Background = Brush(section == Section.Chat ? "BgScreen" : "BgHeader");
-        ExplorerSectionTab.Background = Brush(section == Section.Explorer ? "BgScreen" : "BgHeader");
+        // Tag, not Background: the style's pointer triggers would lose to a background set here.
+        ChatSectionTab.Tag = section == Section.Chat ? "active" : null;
+        ExplorerSectionTab.Tag = section == Section.Explorer ? "active" : null;
         ChatSectionLabel.Foreground = Brush(section == Section.Chat ? "TextPrimary" : "TextSecondary");
         ExplorerSectionLabel.Foreground = Brush(section == Section.Explorer ? "TextPrimary" : "TextSecondary");
         if (section == Section.Chat) ScrollChatToEnd();
     }
 
-    /// <summary>Esc closes an open popup, otherwise goes back to the Devices page — the desktop
-    /// counterpart of the Android Back button.</summary>
+    /// <summary>Esc drops a text selection and an open popup, and once nothing is open goes back
+    /// to the Devices page — the desktop counterpart of the Android Back button.</summary>
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Escape || DialogLayer.Children.Count > 0) return;
+        var hadSelection = _selectionBubble != null;
+        ClearChatSelection();
         if (_popup.IsOpen) _popup.Dismiss();
-        else if (_openPeerUuid != null) OpenDevicesPage();
+        else if (hadSelection) { /* the selection was what Esc closed */ }
+        else if (_openPeerUuid != null || SettingsPage.Visibility == Visibility.Visible) OpenDevicesPage();
         else return;
         e.Handled = true;
     }
@@ -270,13 +296,21 @@ public partial class MainWindow : Window, IPairingPrompt
     /// "back" side button goes back to the Devices page.</summary>
     private void Window_PreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ChangedButton == MouseButton.XButton1 && _openPeerUuid != null && DialogLayer.Children.Count == 0)
+        if (e.ChangedButton == MouseButton.XButton1 && DialogLayer.Children.Count == 0 &&
+            (_openPeerUuid != null || SettingsPage.Visibility == Visibility.Visible))
         {
             OpenDevicesPage();
             e.Handled = true;
             return;
         }
-        if (_popup.IsOpen && !_popup.IsInside(e.OriginalSource as DependencyObject)) _popup.Dismiss();
+        var source = e.OriginalSource as DependencyObject;
+        if (_popup.IsOpen && !_popup.IsInside(source)) _popup.Dismiss();
+        // Any click that is neither on the selected message itself nor inside the popup it opened
+        // ends the selection: another message, the empty chat space, a button, the header.
+        if (_selectionBubble != null && !_popup.IsInside(source) && !IsWithin(source, _selectionBubble))
+        {
+            ClearChatSelection();
+        }
     }
 
     private void ShowToast(string text)
@@ -291,10 +325,29 @@ public partial class MainWindow : Window, IPairingPrompt
 
     /// <summary>Opens a paired device's page. An unpaired device has no chat to show yet — its
     /// popup (right-click) is how it gets paired.</summary>
-    private void DeviceRow_LeftClick(object sender, MouseButtonEventArgs e)
+    private void DeviceRow_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: DeviceRow row } || !row.IsPaired) return;
         OpenDevicePage(row.Uuid, row.Name);
+    }
+
+    /// <summary>The row's 0/1 switch: flicking it on connects (pairing first if this device has
+    /// never been paired), flicking it off cancels a connection still being made or drops the
+    /// one that is up. The click stops here, so the row underneath does not open the device page
+    /// as well.</summary>
+    private void DeviceToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: DeviceRow row }) return;
+        e.Handled = true;
+        if (row.IsConnecting)
+        {
+            // Closing the socket is what aborts an attempt in flight: RunAsync fails, and
+            // ConnectOrPairAsync's finally clears the Connecting state and the switch with it.
+            // Same mechanism as the Cancel button on the first-time pairing dialog.
+            _pendingDialerSession?.Dispose();
+            return;
+        }
+        HandleDeviceAction(row.IsConnectedNow ? "Disconnect" : "Connect", row);
     }
 
     /// <summary>Right-click (the Android long-press): this device's actions, with its row
@@ -312,12 +365,11 @@ public partial class MainWindow : Window, IPairingPrompt
         RebuildDeviceRows();
     }
 
-    /// <summary>Not paired: Connect (which pairs). Paired but not connected: Connect, Unpair.
-    /// Connected: Disconnect, Unpair.</summary>
+    /// <summary>Connecting and disconnecting live on the row's switch now, so the popup is left
+    /// with what is permanent: drop the pairing, or block the device outright. A device that was
+    /// never paired has no pairing to drop.</summary>
     private static IReadOnlyList<string> ActionsFor(DeviceRow row) =>
-        !row.IsPaired ? new[] { "Connect" }
-        : row.IsConnectedNow ? new[] { "Disconnect", "Unpair" }
-        : new[] { "Connect", "Unpair" };
+        row.IsPaired ? new[] { "Unpair", "Blacklist" } : new[] { "Blacklist" };
 
     private async void HandleDeviceAction(string action, DeviceRow row)
     {
@@ -336,6 +388,9 @@ public partial class MainWindow : Window, IPairingPrompt
                 break;
             case "Unpair":
                 await UnpairDeviceAsync(row);
+                break;
+            case "Blacklist":
+                await BlacklistDeviceAsync(row);
                 break;
         }
     }
@@ -392,20 +447,60 @@ public partial class MainWindow : Window, IPairingPrompt
         if (_chatRows.Count > 0) ChatListBox.ScrollIntoView(_chatRows[^1]);
     }
 
-    /// <summary>A left click on a message's row — on the bubble or beside it — opens its popup.
-    /// A click that ended a drag-selection inside the bubble does not: that was text selection.</summary>
-    private void ChatRow_LeftClick(object sender, MouseButtonEventArgs e)
+    /// <summary>A click on a message bubble opens its menu. A click that ended a drag-selection
+    /// inside the bubble opens the selection's own Copy popup instead.</summary>
+    private void ChatBubble_LeftClick(object sender, MouseButtonEventArgs e)
     {
-        if (sender is not Grid { DataContext: ChatRowVm row } grid) return;
-        if (grid.Children[0] is Border { Child: TextBox { SelectionLength: > 0 } }) return;
+        if (sender is not Border { DataContext: ChatRowVm row } bubble) return;
+        // A drag that selected part of the text is not a click on the message: it gets the one
+        // thing that makes sense for a selection, right under where it ends.
+        if (bubble.Child is TextBox { SelectionLength: > 0 } text)
+        {
+            ShowSelectionCopy(text);
+            return;
+        }
         ShowBubbleMenu(row);
     }
 
-    private void ChatRow_RightClick(object sender, MouseButtonEventArgs e)
+    private void ChatBubble_RightClick(object sender, MouseButtonEventArgs e)
     {
-        if (sender is not Grid { DataContext: ChatRowVm row }) return;
+        if (sender is not Border { DataContext: ChatRowVm row }) return;
         e.Handled = true;
         ShowBubbleMenu(row);
+    }
+
+    /// <summary>The Copy popup for a piece of selected text, placed just under the selection's
+    /// last character rather than in the middle of the window.</summary>
+    private void ShowSelectionCopy(TextBox text)
+    {
+        var selected = text.SelectedText;
+        _selectionBubble = text;
+        var end = text.GetRectFromCharacterIndex(text.SelectionStart + text.SelectionLength, trailingEdge: true);
+        var at = text.TranslatePoint(new Point(end.X, end.Bottom + 6), PopupLayer);
+        _popup.Show(new[] { "Copy" }, _ =>
+        {
+            try { Clipboard.SetText(selected); }
+            catch (COMException ex) { SetStatus($"Clipboard is busy, try again: {ex.Message}"); }
+            ClearChatSelection();
+        }, at: at);
+    }
+
+    /// <summary>Drops the text selection a chat bubble is holding, if any.</summary>
+    private void ClearChatSelection()
+    {
+        _selectionBubble?.Select(0, 0);
+        _selectionBubble = null;
+    }
+
+    /// <summary>True if <paramref name="element"/> is <paramref name="ancestor"/> or sits inside
+    /// it.</summary>
+    private static bool IsWithin(DependencyObject? element, DependencyObject ancestor)
+    {
+        for (var current = element; current != null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (ReferenceEquals(current, ancestor)) return true;
+        }
+        return false;
     }
 
     private void ShowBubbleMenu(ChatRowVm row)
@@ -530,6 +625,9 @@ public partial class MainWindow : Window, IPairingPrompt
         var uuids = new HashSet<string>(paired.Keys);
         uuids.UnionWith(_discovered.Keys);
         uuids.Remove(_selfUuid);
+        // A blacklisted device is not on this screen at all — the Settings page is where it can
+        // be found and let back in.
+        foreach (var blocked in BlockedDeviceStore.Load(_blockedDevicesPath)) uuids.Remove(blocked.Uuid);
 
         var rows = uuids.Select(uuid =>
         {
@@ -579,7 +677,8 @@ public partial class MainWindow : Window, IPairingPrompt
         _pendingIncomingSession = session;
         try
         {
-            var outcome = await session.RunAsync(_selfUuid, _selfName, _pairedDevicesPath, this);
+            var outcome = await session.RunAsync(_selfUuid, _selfName, _pairedDevicesPath, this,
+                isBlocked: IsDeviceBlocked);
             DebugLog.Write($"HandleIncomingAsync: RunAsync result={outcome.Result} detail={outcome.Detail}");
             var peerName = outcome.PeerName ?? session.PeerIp;
             SetStatus(OutcomeText(outcome, peerName));
@@ -643,7 +742,7 @@ public partial class MainWindow : Window, IPairingPrompt
             using (session)
             {
                 var outcome = await session.RunAsync(_selfUuid, _selfName, _pairedDevicesPath, this,
-                    isManualConnect: true);
+                    isManualConnect: true, isBlocked: IsDeviceBlocked);
                 var peerName = outcome.PeerName ?? target.Name;
                 SetStatus(OutcomeText(outcome, peerName));
                 if (outcome.Result is PairingResult.Paired or PairingResult.Reconnected)
@@ -731,6 +830,51 @@ public partial class MainWindow : Window, IPairingPrompt
         ChatHistoryStore.DeleteForPeer(_chatDbPath, target.Uuid);
         if (_openPeerUuid == target.Uuid) OpenDevicesPage();
         RebuildDeviceRows();
+    }
+
+    /// <summary>Whether this device is blacklisted. Passed into every pairing attempt, incoming
+    /// and outgoing, so a blocked peer is hung up on as soon as it says who it is.</summary>
+    private bool IsDeviceBlocked(string uuid) => BlockedDeviceStore.IsBlocked(_blockedDevicesPath, uuid);
+
+    /// <summary>Blocks the device, after confirmation: the live session (or the attempt still
+    /// being made) ends, the pairing and the chat go the way <see cref="UnpairDeviceAsync"/>
+    /// takes them, and the device drops off the Devices page until it is let back in from the
+    /// Settings page.</summary>
+    private async Task BlacklistDeviceAsync(DeviceRow target)
+    {
+        var confirmed = await ShowConfirmAsync("Blacklist",
+            $"Block {target.Name}? It leaves the device list and its connections are refused.",
+            "Block", "Cancel", CancellationToken.None);
+        if (!confirmed) return;
+
+        if (target.IsConnecting) _pendingDialerSession?.Dispose();
+        if (_meshPeerUuid == target.Uuid) await DisconnectCurrentSessionAsync();
+        PairedDeviceStore.Remove(_pairedDevicesPath, target.Uuid);
+        ChatHistoryStore.DeleteForPeer(_chatDbPath, target.Uuid);
+        BlockedDeviceStore.Add(_blockedDevicesPath,
+            new BlockedDevice { Uuid = target.Uuid, Name = target.Name, BlockedAt = DateTimeOffset.UtcNow });
+        if (_openPeerUuid == target.Uuid) OpenDevicesPage();
+        RebuildDeviceRows();
+        RebuildBlockedRows();
+    }
+
+    /// <summary>Settings page: lets a blocked device back in. It comes back as an ordinary
+    /// unpaired device — blocking dropped the pairing, so the two have to pair again.</summary>
+    private void UnblockButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: BlockedDevice blocked }) return;
+        BlockedDeviceStore.Remove(_blockedDevicesPath, blocked.Uuid);
+        RebuildBlockedRows();
+        RebuildDeviceRows();
+    }
+
+    private void RebuildBlockedRows()
+    {
+        _blockedRows.Clear();
+        foreach (var blocked in BlockedDeviceStore.Load(_blockedDevicesPath)
+                     .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
+            _blockedRows.Add(blocked);
+        NoBlockedDevicesText.Visibility = _blockedRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     // Mesh session lifecycle -------------------------------------------------------------
@@ -1186,6 +1330,10 @@ public partial class MainWindow : Window, IPairingPrompt
         var connecting = false;
         dialog.PositiveClicked += () =>
         {
+            // Answer first, close second: Close() raises Closed synchronously, and that handler
+            // records the "no" that dismissing a dialog without answering means. Whichever call
+            // lands first is the answer, so closing first would turn every "yes" into a "no".
+            answer.TrySetResult(true);
             if (keepOpenOnYes)
             {
                 connecting = true;
@@ -1197,7 +1345,6 @@ public partial class MainWindow : Window, IPairingPrompt
             {
                 dialog.Close();
             }
-            answer.TrySetResult(true);
         };
         dialog.NegativeClicked += () =>
         {

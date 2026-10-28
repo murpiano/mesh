@@ -7,10 +7,11 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [PairedDevice::class, ChatMessage::class], version = 3)
+@Database(entities = [PairedDevice::class, ChatMessage::class, BlockedDevice::class], version = 4)
 abstract class MeshDatabase : RoomDatabase() {
     abstract fun pairedDeviceDao(): PairedDeviceDao
     abstract fun chatMessageDao(): ChatMessageDao
+    abstract fun blockedDeviceDao(): BlockedDeviceDao
 
     companion object {
         @Volatile private var instance: MeshDatabase? = null
@@ -61,10 +62,29 @@ abstract class MeshDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v3 -> v4 adds the blacklist. Additive, like MIGRATION_1_2: paired_devices and
+         * chat_messages hold real trust and real history on installed devices, and a
+         * destructive migration would wipe both.
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS blocked_devices (
+                        uuid TEXT NOT NULL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        blockedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getInstance(context: Context): MeshDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(context, MeshDatabase::class.java, "mesh.db")
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { instance = it }
             }

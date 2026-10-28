@@ -76,6 +76,8 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
                         bubble.setTextIsSelectable(true)
                     }
                 }
+                // A tap beside the bubbles belongs to no message: it only clears what is open.
+                if (!isOnBubble(recycler, event.x, event.y)) DarkPopup.dismissCurrent()
             }
             false
         }
@@ -160,6 +162,16 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
             if (confirmed) mainActivity.deleteChatMessage(peerUuid, message.msgId)
         }
     }
+
+    /** True if ([x], [y]) in [recycler]'s own coordinates lands on a message bubble rather than
+     * on the empty part of its row. A row spans the full width, the bubble does not. */
+    private fun isOnBubble(recycler: RecyclerView, x: Float, y: Float): Boolean {
+        val row = recycler.findChildViewUnder(x, y) ?: return false
+        val bubble = row.findViewById<TextView>(R.id.bubbleText) ?: return false
+        val left = row.left + bubble.left
+        val top = row.top + bubble.top
+        return x >= left && x <= left + bubble.width && y >= top && y <= top + bubble.height
+    }
 }
 
 /**
@@ -212,7 +224,8 @@ class ChatMessageAdapter(
         private val bubbleDetector = GestureDetector(view.context, bubbleGestureListener)
 
         init {
-            itemView.setOnClickListener { onTap?.invoke() }
+            // Only the bubble opens the menu. The empty space beside it is background, and a tap
+            // there clears the open popup and any selection (see the recycler's touch listener).
             bubbleText.setOnTouchListener { _, event -> bubbleDetector.onTouchEvent(event); false }
         }
 

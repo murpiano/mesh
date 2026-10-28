@@ -1,7 +1,7 @@
 package com.mesh.ui
 
-import android.graphics.Color
 import android.os.Bundle
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -39,6 +39,7 @@ class DevicesFragment : Fragment(R.layout.fragment_devices) {
         list.adapter = adapter
         view.findViewById<Button>(R.id.refreshButton).setOnClickListener { mainActivity.startDiscovery() }
         view.findViewById<View>(R.id.meshTitle).setOnClickListener { mainActivity.openDevicesPage() }
+        view.findViewById<View>(R.id.settingsButton).setOnClickListener { mainActivity.openSettingsPage() }
 
         // The "Status" column (header + every row's dot) is exactly as wide as the word
         // "Devices" in the (now centered) card title above it, so the header never wraps and the
@@ -50,6 +51,16 @@ class DevicesFragment : Fragment(R.layout.fragment_devices) {
         if (width > 0) {
             statusHeaderColumn.layoutParams = statusHeaderColumn.layoutParams.apply { this.width = width }
             adapter.columnWidthPx = width
+        }
+
+        // The State column is as wide as the longest word it can hold, so every row's switch
+        // sits exactly under the one above it instead of shifting with the word beside it.
+        val sample = LayoutInflater.from(view.context).inflate(R.layout.item_device_row, list, false)
+        val stateWidth = sample.findViewById<TextView>(R.id.stateText).paint.measureText("Connecting").toInt()
+        if (stateWidth > 0) {
+            adapter.stateWidthPx = stateWidth
+            val stateHeader = view.findViewById<TextView>(R.id.stateHeaderColumn)
+            stateHeader.layoutParams = stateHeader.layoutParams.apply { this.width = stateWidth }
         }
 
         renderDeviceList()
@@ -83,6 +94,9 @@ class DevicesFragment : Fragment(R.layout.fragment_devices) {
         var rows: List<DeviceRow> = emptyList()
         /** Set once from [DevicesFragment.onViewCreated] to match the "Devices" title's width. */
         var columnWidthPx: Int = 0
+        /** Set once from [DevicesFragment.onViewCreated]: the width of the word "Connecting", so
+         * the State column never changes width and the switches stay in one line. */
+        var stateWidthPx: Int = 0
         /** uuid of the row whose popup is currently open, if any — highlighted green like a
          * connected status dot/stripe until the popup is dismissed. */
         private var selectedUuid: String? = null
@@ -97,16 +111,44 @@ class DevicesFragment : Fragment(R.layout.fragment_devices) {
             val row = rows[position]
 
             view.findViewById<TextView>(R.id.nameText).text = row.name
-            view.findViewById<TextView>(R.id.stateText).text = row.stateLabel
+            val stateText = view.findViewById<TextView>(R.id.stateText)
+            stateText.text = row.stateLabel
+            if (stateWidthPx > 0) {
+                stateText.layoutParams = stateText.layoutParams.apply { width = stateWidthPx }
+            }
             view.findViewById<View>(R.id.statusDot).setBackgroundResource(
                 if (row.isOnline) R.drawable.status_dot_online else R.drawable.status_dot_offline)
             if (columnWidthPx > 0) {
                 val column = view.findViewById<FrameLayout>(R.id.statusColumn)
                 column.layoutParams = column.layoutParams.apply { width = columnWidthPx }
             }
-            view.setBackgroundColor(
-                if (row.uuid == selectedUuid) view.context.getColor(R.color.bg_selected_active)
-                else Color.TRANSPARENT)
+            // The 0/1 switch between the name and the state: flicked right and green while this
+            // device is connecting or connected. Tapping it is the only thing that connects,
+            // cancels a connection still being made, or disconnects from this screen; the rest
+            // of the row opens the device.
+            val toggle = view.findViewById<FrameLayout>(R.id.connectToggle)
+            val track = view.findViewById<FrameLayout>(R.id.toggleTrack)
+            val mark = view.findViewById<TextView>(R.id.toggleMark)
+            val switchOn = row.isSwitchOn
+            track.setBackgroundResource(
+                if (switchOn) R.drawable.toggle_track_on else R.drawable.toggle_track_off)
+            mark.text = if (switchOn) "I" else "0"
+            mark.layoutParams = (mark.layoutParams as FrameLayout.LayoutParams).apply {
+                gravity = (if (switchOn) Gravity.END else Gravity.START) or Gravity.CENTER_VERTICAL
+            }
+            toggle.setOnClickListener {
+                when {
+                    // Flicked off while the connection is still being made: abort that attempt.
+                    row.isConnecting -> mainActivity.cancelPendingConnect()
+                    row.isConnectedNow -> mainActivity.disconnectMeshSession()
+                    row.isPaired -> mainActivity.connectDevice(row.uuid)
+                    else -> mainActivity.pairDevice(row.uuid)
+                }
+            }
+
+            // isActivated, not a background colour: the row's drawable (row_selector) carries
+            // both the highlight and the press ripple, and a colour set here would hide them.
+            view.isActivated = row.uuid == selectedUuid
 
             // Tap opens the device's page; only meaningful once paired (an unpaired device has
             // no chat/history to show there — see the popup below for how to pair it).
@@ -127,19 +169,16 @@ class DevicesFragment : Fragment(R.layout.fragment_devices) {
             return view
         }
 
-        /** Mirrors the design spec: not paired → just Connect (which pairs); paired but not
-         * connected → Connect + Unpair; connected → Disconnect + Unpair. */
-        private fun actionsFor(row: DeviceRow): List<String> = when {
-            !row.isPaired -> listOf("Connect")
-            row.isConnectedNow -> listOf("Disconnect", "Unpair")
-            else -> listOf("Connect", "Unpair")
-        }
+        /** Connecting and disconnecting live on the row's switch now, so the popup is left with
+         * what is permanent: drop the pairing, or block the device outright. A device that was
+         * never paired has no pairing to drop. */
+        private fun actionsFor(row: DeviceRow): List<String> =
+            if (row.isPaired) listOf("Unpair", "Blacklist") else listOf("Blacklist")
 
         private fun handleAction(action: String, row: DeviceRow) {
             when (action) {
-                "Connect" -> if (row.isPaired) mainActivity.connectDevice(row.uuid) else mainActivity.pairDevice(row.uuid)
-                "Disconnect" -> mainActivity.disconnectMeshSession()
                 "Unpair" -> mainActivity.unpairDevice(row.uuid)
+                "Blacklist" -> mainActivity.blacklistDevice(row.uuid)
             }
         }
     }

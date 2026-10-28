@@ -17,5 +17,6 @@
         android:paddingTop="8dp"
         android:paddingBottom="8dp"
         android:textColor="@color/text_primary"
-        android:textIsSelectable="true"/>
+        android:textIsSelectable="true"
+        android:foreground="@drawable/ripple_bubble"/>
 </LinearLayout>

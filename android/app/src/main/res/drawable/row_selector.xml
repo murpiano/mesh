@@ -1,9 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:state_pressed="true">
-        <shape android:shape="rectangle"><solid android:color="@color/bg_row_selected"/></shape>
+<!-- A device row: a ripple under the finger, the shared yellow while its popup is open
+     (set with isActivated, see DevicesFragment). Twin of DeviceRowButton in Theme.xaml. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/ripple">
+    <item android:id="@android:id/mask">
+        <shape android:shape="rectangle"><solid android:color="#FFFFFFFF"/></shape>
     </item>
     <item>
-        <shape android:shape="rectangle"><solid android:color="@android:color/transparent"/></shape>
+        <selector>
+            <item android:state_activated="true">
+                <shape android:shape="rectangle"><solid android:color="@color/bg_selected_active"/></shape>
+            </item>
+            <item android:state_pressed="true">
+                <shape android:shape="rectangle"><solid android:color="@color/bg_row_selected"/></shape>
+            </item>
+            <item>
+                <shape android:shape="rectangle"><solid android:color="@android:color/transparent"/></shape>
+            </item>
+        </selector>
     </item>
-</selector>
+</ripple>

@@ -4,6 +4,7 @@
     android:layout_height="wrap_content"
     android:paddingTop="14dp"
     android:paddingBottom="14dp"
+    android:background="@drawable/row_selector"
     android:gravity="center_vertical">
 
     <FrameLayout
@@ -25,6 +26,41 @@
         android:layout_weight="1"
         android:textSize="16sp"
         android:textColor="@color/text_primary"/>
+
+    <!-- The transparent padding is the point: the switch is small, so taps land around it as
+         often as on it, and every one of those used to open the device page instead. -->
+    <FrameLayout
+        android:id="@+id/connectToggle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
+        android:clickable="true"
+        android:focusable="true">
+
+        <FrameLayout
+            android:id="@+id/toggleTrack"
+            android:layout_width="38dp"
+            android:layout_height="20dp"
+            android:background="@drawable/toggle_track_off">
+
+            <TextView
+                android:id="@+id/toggleMark"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_gravity="start|center_vertical"
+                android:layout_marginStart="2dp"
+                android:layout_marginEnd="2dp"
+                android:background="@drawable/toggle_knob"
+                android:gravity="center"
+                android:text="0"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:textColor="@color/bg_screen"/>
+        </FrameLayout>
+    </FrameLayout>
 
     <TextView
         android:id="@+id/stateText"

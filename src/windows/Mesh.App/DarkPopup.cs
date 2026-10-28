@@ -58,7 +58,11 @@ public sealed class DarkPopup
     /// <summary>Opens a popup with one row per item, replacing any popup already open.
     /// <paramref name="onSelected"/> gets the clicked item's label; <paramref name="onDismiss"/>
     /// runs once the popup closes for any reason (used to clear a highlighted row).</summary>
-    public void Show(IReadOnlyList<string> items, Action<string> onSelected, Action? onDismiss = null)
+    /// <param name="at">Where to put the card's top-left corner, in <see cref="_host"/>'s
+    /// coordinates, kept inside the host. Omitted, the card sits in the middle of the window as
+    /// every menu does; the selection's Copy popup passes the point under the selected text.</param>
+    public void Show(IReadOnlyList<string> items, Action<string> onSelected, Action? onDismiss = null,
+        Point? at = null)
     {
         Dismiss();
         var itemWidth = FixedItemWidth();
@@ -85,9 +89,12 @@ public sealed class DarkPopup
                     HorizontalAlignment = HorizontalAlignment.Center
                 }
             };
-            var pressed = (Brush)Application.Current.FindResource("BgPopupItemPressed");
-            item.MouseEnter += (_, _) => item.Background = pressed;
+            // Two steps, as on the phone: a tint under the pointer, a stronger one while held.
+            var hover = (Brush)Application.Current.FindResource("BgPopupItemPressed");
+            var pressed = (Brush)Application.Current.FindResource("BgPressed");
+            item.MouseEnter += (_, _) => item.Background = hover;
             item.MouseLeave += (_, _) => item.Background = Brushes.Transparent;
+            item.MouseLeftButtonDown += (_, _) => item.Background = pressed;
             item.MouseLeftButtonUp += (_, e) =>
             {
                 e.Handled = true;
@@ -106,6 +113,17 @@ public sealed class DarkPopup
             Effect = new DropShadowEffect { BlurRadius = 16, ShadowDepth = 2, Opacity = 0.5 },
             Child = stack
         };
+        if (at is { } point)
+        {
+            _card.HorizontalAlignment = HorizontalAlignment.Left;
+            _card.VerticalAlignment = VerticalAlignment.Top;
+            // Measured first, so the card can be kept inside the host rather than half off it.
+            _card.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            var size = _card.DesiredSize;
+            var left = Math.Max(0, Math.Min(point.X, _host.ActualWidth - size.Width));
+            var top = Math.Max(0, Math.Min(point.Y, _host.ActualHeight - size.Height));
+            _card.Margin = new Thickness(left, top, 0, 0);
+        }
         _onDismiss = onDismiss;
         _host.Children.Add(_card);
     }

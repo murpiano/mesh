@@ -23,4 +23,8 @@ public sealed record DeviceRow(
     /// Connecting/Connected/Trusted currently applies.</summary>
     public string StateLabel =>
         !IsPaired ? "" : IsConnecting ? "Connecting" : IsConnectedNow ? "Connected" : "Trusted";
+
+    /// <summary>The row's 0/1 switch: on from the moment a connection starts until it is
+    /// gone.</summary>
+    public bool IsSwitchOn => IsConnecting || IsConnectedNow;
 }

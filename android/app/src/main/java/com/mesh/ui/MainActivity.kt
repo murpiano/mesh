@@ -146,6 +146,9 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
 
     internal fun openDevicesPage() = showFragment(DevicesFragment())
 
+    /** The gear: the Settings screen, which so far holds the blacklist. */
+    internal fun openSettingsPage() = showFragment(SettingsFragment())
+
     // Chat -------------------------------------------------------------------------------------
 
     internal val selfDeviceUuid: String? get() = selfUuid
@@ -166,7 +169,7 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
         openDevicesPage()
         onBackPressedDispatcher.addCallback(this) {
             // A device page's own "back" target is the device list, not closing the app.
-            if (deviceFragment() != null) openDevicesPage() else {
+            if (deviceFragment() != null || settingsFragment() != null) openDevicesPage() else {
                 isEnabled = false
                 onBackPressedDispatcher.onBackPressed()
                 isEnabled = true
@@ -224,6 +227,9 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
 
     private fun deviceFragment() =
         supportFragmentManager.findFragmentById(R.id.fragmentContainer) as? DeviceFragment
+
+    private fun settingsFragment() =
+        supportFragmentManager.findFragmentById(R.id.fragmentContainer) as? SettingsFragment
 
     /** Reloads the currently-visible chat section if its device page is showing [peerUuid]. A
      * no-op otherwise — that page's chat section reloads fresh the next time it's shown. */
@@ -293,6 +299,9 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
             uuids.addAll(pairedByUuid.keys)
             uuids.addAll(devices.map { it.uuid })
             selfUuid?.let { uuids.remove(it) }
+            // A blacklisted device is not on this screen at all — the Settings screen is where
+            // it can be found and let back in.
+            blockedDevices().forEach { uuids.remove(it.uuid) }
 
             val rows = uuids.map { uuid ->
                 val discovered = devices.firstOrNull { it.uuid == uuid }
@@ -327,7 +336,7 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
         setPairingInFlight(true)
         pendingIncomingSession = session
         try {
-            val outcome = session.run(uuid, selfName, dao(), this)
+            val outcome = session.run(uuid, selfName, dao(), this, isBlocked = ::isDeviceBlocked)
             val peerName = outcome.peerName ?: session.peerIp
             // PairingSession.run only returns RECONNECTED after the peer's certificate already
             // matched our trust record, so it is always a background reconnect of an
@@ -363,6 +372,13 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
     }
 
     /** Pair button on an unpaired row: first-time pairing, dialer side, asymmetric PIN entry. */
+    /** Aborts an outgoing attempt still in flight (the row's switch flicked back off). Closing
+     * the socket is what stops it: run() fails, and connectOrPair's finally clears the
+     * Connecting state. Same mechanism as the Cancel button on the first-time pairing dialog. */
+    internal fun cancelPendingConnect() {
+        pendingDialerSession?.close()
+    }
+
     internal fun pairDevice(uuid: String) = connectOrPair(uuid, isFirstTimePair = true)
 
     /** Connect button on an already-paired row: manual trusted reconnect, listener gets a
@@ -405,7 +421,8 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
                 // On success the transport is detached into a MeshSession, which makes use{}'s
                 // close a no-op; on every other outcome it closes the socket as before.
                 session.use {
-                    val outcome = it.run(self, selfName, dao(), this@MainActivity, isManualConnect = true)
+                    val outcome = it.run(self, selfName, dao(), this@MainActivity, isManualConnect = true,
+                        isBlocked = ::isDeviceBlocked)
                     val peerName = outcome.peerName ?: row.name
                     // No success dialog by design — the row's own Connected/greyed state is the
                     // confirmation; only failures get a status-line message.
@@ -455,6 +472,67 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
     }
 
     private fun dao() = MeshDatabase.getInstance(this).pairedDeviceDao()
+
+    private fun blockedDao() = MeshDatabase.getInstance(this).blockedDeviceDao()
+
+    /** Whether this device is blacklisted. Passed into every pairing attempt, incoming and
+     * outgoing, so a blocked peer is hung up on as soon as it says who it is. */
+    private suspend fun isDeviceBlocked(uuid: String): Boolean =
+        try { blockedDao().isBlocked(uuid) } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            false
+        }
+
+    /** Blocks the device, after confirmation: the live session (or the attempt still being made)
+     * ends, the pairing and the chat go the way [unpairDevice] takes them, and the device drops
+     * off the Devices screen until it is let back in from Settings. */
+    internal fun blacklistDevice(uuid: String) {
+        val row = deviceRows.firstOrNull { it.uuid == uuid } ?: return
+        lifecycleScope.launch {
+            val confirmed = PinConfirmDialog.show(
+                this@MainActivity, "Blacklist",
+                "Block ${row.name}? It leaves the device list and its connections are refused.",
+                "Block", "Cancel")
+            if (!confirmed) return@launch
+            if (row.isConnecting) cancelPendingConnect()
+            if (meshPeerUuid == uuid) disconnectMeshSession()
+            try {
+                dao().deleteByUuid(uuid)
+                chatMessageDao().deleteForPeer(uuid)
+                blockedDao().upsert(BlockedDevice(uuid, row.name, System.currentTimeMillis()))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Best effort; the device simply stays listed if this failed.
+            }
+            if (deviceFragment()?.peerUuid == uuid) openDevicesPage()
+            rebuildDeviceRows()
+            settingsFragment()?.renderBlockedList()
+        }
+    }
+
+    /** Settings screen: the blacklist, newest name order, for [SettingsFragment]. */
+    internal suspend fun blockedDevices(): List<BlockedDevice> =
+        try { blockedDao().all() } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emptyList()
+        }
+
+    /** Settings screen: lets a blocked device back in. It comes back as an ordinary unpaired
+     * device — blocking dropped the pairing, so the two have to pair again. */
+    internal fun unblockDevice(uuid: String) {
+        lifecycleScope.launch {
+            try { blockedDao().deleteByUuid(uuid) } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return@launch
+            }
+            settingsFragment()?.renderBlockedList()
+            rebuildDeviceRows()
+        }
+    }
 
     // Mesh session lifecycle -----------------------------------------------------------------
 
