@@ -10,6 +10,11 @@ public class DiscoveredDevice
     public required string Platform { get; set; }
     public required string IpAddress { get; set; }
     public required int Port { get; set; }
+
+    /// <summary>True when the device announced that it can take a screen cast. Builds older
+    /// than casting leave the TXT key out, so they are never offered it — their read loop would
+    /// throw on the new message tags.</summary>
+    public bool SupportsCast { get; set; }
 }
 
 /// <summary>Raised/reported when mDNS cannot be used (no interface, socket blocked, ...).</summary>
@@ -29,6 +34,9 @@ public class MeshDiscovery : IDisposable
 {
     private const string ServiceType = "_meshlink._tcp";
     private const string InstanceSuffix = "._meshlink._tcp.local";
+
+    /// <summary>The TXT key that says this build understands the cast messages.</summary>
+    private const string CastTxtKey = "cast";
 
     private readonly object _lock = new();
     private MulticastService? _mdns;
@@ -80,6 +88,7 @@ public class MeshDiscovery : IDisposable
             profile.AddProperty("id", uuid);
             profile.AddProperty("name", name);
             profile.AddProperty("platform", platform);
+            profile.AddProperty(CastTxtKey, "1");
 
             _discovery!.Advertise(profile);
             EnsureStarted();
@@ -197,7 +206,7 @@ public class MeshDiscovery : IDisposable
                     if (_queriedHosts.Add(target)) hostsToQuery.Add(srv.Target);
                     continue;
                 }
-                var signature = $"{uuid}|{ip}|{srv.Port}";
+                var signature = $"{uuid}|{ip}|{srv.Port}|{props.GetValueOrDefault(CastTxtKey)}";
                 if (_emitted.TryGetValue(instance, out var prev) && prev == signature) continue;
                 _emitted[instance] = signature;
                 toEmit.Add(new DiscoveredDevice
@@ -206,7 +215,8 @@ public class MeshDiscovery : IDisposable
                     Name = props.GetValueOrDefault("name", uuid),
                     Platform = props.GetValueOrDefault("platform", "unknown"),
                     IpAddress = ip,
-                    Port = srv.Port
+                    Port = srv.Port,
+                    SupportsCast = props.GetValueOrDefault(CastTxtKey) == "1"
                 });
             }
         }

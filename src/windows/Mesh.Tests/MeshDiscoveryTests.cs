@@ -1,3 +1,4 @@
+using Makaretu.Dns;
 using Mesh.Core;
 using Xunit;
 
@@ -62,6 +63,48 @@ public class MeshDiscoveryTests
 
         advertiser.Dispose(); // sends goodbye
         Assert.Equal("test-uuid-bye", await lost.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+
+    [Fact]
+    public async Task ADeviceOfThisBuild_IsFoundAsAbleToTakeACast()
+    {
+        var found = new TaskCompletionSource<DiscoveredDevice>();
+        using var browser = new MeshDiscovery();
+        browser.StartBrowsing(device =>
+        {
+            if (device.Uuid == "test-uuid-cast") found.TrySetResult(device);
+        });
+
+        using var advertiser = new MeshDiscovery();
+        advertiser.Advertise("test-uuid-cast", "CastPC", "windows", 5559);
+
+        var device = await found.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(device.SupportsCast);
+    }
+
+    [Fact]
+    public async Task AnOlderDeviceThatDoesNotAnnounceCasting_IsFoundWithoutIt()
+    {
+        var found = new TaskCompletionSource<DiscoveredDevice>();
+        using var browser = new MeshDiscovery();
+        browser.StartBrowsing(device =>
+        {
+            if (device.Uuid == "test-uuid-nocast") found.TrySetResult(device);
+        });
+
+        // An earlier build of Mesh: the same service, without the cast property.
+        using var mdns = new MulticastService();
+        using var discovery = new ServiceDiscovery(mdns);
+        var profile = new ServiceProfile("OldPC", "_meshlink._tcp", 5560);
+        profile.AddProperty("id", "test-uuid-nocast");
+        profile.AddProperty("name", "OldPC");
+        profile.AddProperty("platform", "windows");
+        discovery.Advertise(profile);
+        mdns.Start();
+        discovery.Announce(profile);
+
+        var device = await found.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(device.SupportsCast);
     }
 
     [Fact]

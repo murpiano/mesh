@@ -14,7 +14,8 @@ data class DeviceRow(
     val isConnectedNow: Boolean,
     val isConnecting: Boolean,
     val ipAddress: String,
-    val port: Int
+    val port: Int,
+    val supportsCast: Boolean = false
 ) {
     /** The "Состояние" column text (see raw/design/1.jpg): empty when never paired, otherwise
      * whichever of Connecting/Connected/Trusted currently applies. */

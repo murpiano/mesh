@@ -642,7 +642,8 @@ public partial class MainWindow : Window, IPairingPrompt
             var ip = isOnline ? discovered!.IpAddress : pairedDevice?.LastIp ?? "";
             var port = isOnline ? discovered!.Port : 0;
             return new DeviceRow(uuid, name, isOnline, isPaired, isConnectedNow, isConnecting, ip, port,
-                IsHighlighted: _highlightedDeviceUuid == uuid);
+                IsHighlighted: _highlightedDeviceUuid == uuid,
+                SupportsCast: isOnline && discovered!.SupportsCast);
         })
         .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
         .ToList();

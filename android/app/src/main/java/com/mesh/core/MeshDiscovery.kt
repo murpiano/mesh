@@ -10,7 +10,11 @@ data class DiscoveredDevice(
     val name: String,
     val platform: String,
     val ipAddress: String,
-    val port: Int
+    val port: Int,
+    /** True when the device announced that it can take a screen cast. Builds older than
+     * casting leave the TXT key out, so they are never offered it — their read loop would
+     * throw on the new message tags. */
+    val supportsCast: Boolean = false
 )
 
 /**
@@ -53,6 +57,7 @@ class MeshDiscovery(context: Context) {
             setAttribute("id", uuid)
             setAttribute("name", name)
             setAttribute("platform", platform)
+            setAttribute(CAST_ATTRIBUTE, "1")
         }
 
         val listener = object : NsdManager.RegistrationListener {
@@ -137,13 +142,15 @@ class MeshDiscovery(context: Context) {
                     val uuid = info.attributes["id"]?.toString(Charsets.UTF_8)
                     val name = info.attributes["name"]?.toString(Charsets.UTF_8) ?: uuid
                     val platform = info.attributes["platform"]?.toString(Charsets.UTF_8) ?: "unknown"
+                    val supportsCast =
+                        info.attributes[CAST_ATTRIBUTE]?.toString(Charsets.UTF_8) == "1"
                     val host = info.host?.hostAddress
                     synchronized(lock) {
                         resolveInFlight = false
                         if (uuid != null) serviceNameToUuid[info.serviceName] = uuid
                     }
                     if (uuid != null && host != null) {
-                        onFound(DiscoveredDevice(uuid, name ?: uuid, platform, host, info.port))
+                        onFound(DiscoveredDevice(uuid, name ?: uuid, platform, host, info.port, supportsCast))
                     }
                     resolveNext(onFound)
                 }
@@ -166,5 +173,10 @@ class MeshDiscovery(context: Context) {
         registrationListener?.let { runCatching { nsdManager.unregisterService(it) } }
         registrationListener = null
         stopBrowsing()
+    }
+
+    companion object {
+        /** The TXT key that says this build understands the cast messages. */
+        const val CAST_ATTRIBUTE = "cast"
     }
 }

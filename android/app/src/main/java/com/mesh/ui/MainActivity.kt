@@ -314,7 +314,8 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
                     isConnectedNow = record != null && meshPeerUuid == uuid && meshSession != null,
                     isConnecting = connectingUuid == uuid,
                     ipAddress = discovered?.ipAddress ?: record?.lastIp ?: "",
-                    port = discovered?.port ?: 0
+                    port = discovered?.port ?: 0,
+                    supportsCast = discovered?.supportsCast == true
                 )
             }.sortedBy { it.name.lowercase() }
 

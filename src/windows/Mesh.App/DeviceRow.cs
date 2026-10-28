@@ -17,7 +17,8 @@ public sealed record DeviceRow(
     bool IsConnecting,
     string IpAddress,
     int Port,
-    bool IsHighlighted)
+    bool IsHighlighted,
+    bool SupportsCast)
 {
     /// <summary>The State column: empty when never paired, otherwise whichever of
     /// Connecting/Connected/Trusted currently applies.</summary>
