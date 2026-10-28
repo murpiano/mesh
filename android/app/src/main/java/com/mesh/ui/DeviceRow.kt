@@ -25,4 +25,7 @@ data class DeviceRow(
             isConnectedNow -> "Connected"
             else -> "Trusted"
         }
+
+    /** The row's 0/1 switch: on from the moment a connection starts until it is gone. */
+    val isSwitchOn: Boolean get() = isConnecting || isConnectedNow
 }

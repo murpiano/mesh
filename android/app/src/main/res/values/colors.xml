@@ -29,6 +29,11 @@
     <color name="status_online">#FF34C759</color>
     <color name="status_offline_ring">#FF6C6C70</color>
 
+    <!-- The 0/1 switch in a device row: its track when off, and the knob that carries the mark.
+         On, the track takes status_online. Twins of ToggleTrackOff/ToggleKnob in Theme.xaml. -->
+    <color name="toggle_track_off">#FF48484A</color>
+    <color name="toggle_knob">#FFFFFFFF</color>
+
     <!-- Popup item color by meaning: affirmative/connect actions, destructive/negative ones. -->
     <color name="action_positive">#FF34C759</color>
     <color name="action_negative">#FFFF453A</color>

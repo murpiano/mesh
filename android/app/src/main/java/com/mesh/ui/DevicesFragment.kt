@@ -1,6 +1,7 @@
 package com.mesh.ui
 
 import android.os.Bundle
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -103,6 +104,26 @@ class DevicesFragment : Fragment(R.layout.fragment_devices) {
                 val column = view.findViewById<FrameLayout>(R.id.statusColumn)
                 column.layoutParams = column.layoutParams.apply { width = columnWidthPx }
             }
+            // The 0/1 switch between the name and the state: flicked right and green while this
+            // device is connecting or connected. Tapping it is the only thing that connects or
+            // disconnects from this screen; the rest of the row opens the device.
+            val toggle = view.findViewById<FrameLayout>(R.id.connectToggle)
+            val mark = view.findViewById<TextView>(R.id.toggleMark)
+            val switchOn = row.isSwitchOn
+            toggle.setBackgroundResource(
+                if (switchOn) R.drawable.toggle_track_on else R.drawable.toggle_track_off)
+            mark.text = if (switchOn) "I" else "0"
+            mark.layoutParams = (mark.layoutParams as FrameLayout.LayoutParams).apply {
+                gravity = (if (switchOn) Gravity.END else Gravity.START) or Gravity.CENTER_VERTICAL
+            }
+            toggle.setOnClickListener {
+                when {
+                    switchOn -> mainActivity.disconnectMeshSession()
+                    row.isPaired -> mainActivity.connectDevice(row.uuid)
+                    else -> mainActivity.pairDevice(row.uuid)
+                }
+            }
+
             // isActivated, not a background colour: the row's drawable (row_selector) carries
             // both the highlight and the press ripple, and a colour set here would hide them.
             view.isActivated = row.uuid == selectedUuid

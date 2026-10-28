@@ -36,6 +36,11 @@
     <SolidColorBrush x:Key="ConnUnpaired" Color="#FFFF3B30"/>
     <SolidColorBrush x:Key="ConnOffline" Color="#FF48484A"/>
 
+    <!-- The 0/1 switch in a device row: its grey track when off, and the white knob that carries
+         the 0/I mark. Green when on comes from StatusOnline, the same green as an online dot. -->
+    <SolidColorBrush x:Key="ToggleTrackOff" Color="#FF48484A"/>
+    <SolidColorBrush x:Key="ToggleKnob" Color="#FFFFFFFF"/>
+
     <!-- A button that is just its content (text or glyph) until you point at it: then it takes a
          rounded tint, and a stronger one while held, so every click has something to answer it.
          The phone's twins are the ripples in drawable/. -->
@@ -146,6 +151,52 @@
                         <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
                             <Setter TargetName="Chrome" Property="Background" Value="{StaticResource BgSelectedActive}"/>
                         </DataTrigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The switch between a device's name and its state. Flicked right and green while that
+         device is connecting or connected, grey and left otherwise; clicking it is what connects
+         and disconnects, while a click anywhere else on the row still opens the device. Twin of
+         toggle_track_on.xml / toggle_track_off.xml on the phone. -->
+    <Style x:Key="DeviceToggle" TargetType="Button">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="Margin" Value="12,0"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Name="Track" Width="46" Height="26" CornerRadius="13"
+                            Background="{StaticResource ToggleTrackOff}" RenderTransformOrigin="0.5,0.5">
+                        <Border Name="Knob" Width="22" Height="22" CornerRadius="11" Margin="2,0"
+                                HorizontalAlignment="Left" Background="{StaticResource ToggleKnob}">
+                            <TextBlock Name="Mark" Text="0" FontSize="13" FontWeight="Bold"
+                                       Foreground="{StaticResource BgScreen}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsSwitchOn}" Value="True">
+                            <Setter TargetName="Track" Property="Background" Value="{StaticResource StatusOnline}"/>
+                            <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/>
+                            <Setter TargetName="Mark" Property="Text" Value="I"/>
+                        </DataTrigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Track" Property="RenderTransform">
+                                <Setter.Value>
+                                    <ScaleTransform ScaleX="1.12" ScaleY="1.12"/>
+                                </Setter.Value>
+                            </Setter>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Track" Property="RenderTransform">
+                                <Setter.Value>
+                                    <ScaleTransform ScaleX="0.94" ScaleY="0.94"/>
+                                </Setter.Value>
+                            </Setter>
+                        </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>

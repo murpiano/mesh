@@ -27,6 +27,31 @@
         android:textSize="16sp"
         android:textColor="@color/text_primary"/>
 
+    <FrameLayout
+        android:id="@+id/connectToggle"
+        android:layout_width="46dp"
+        android:layout_height="26dp"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp"
+        android:background="@drawable/toggle_track_off"
+        android:clickable="true"
+        android:focusable="true">
+
+        <TextView
+            android:id="@+id/toggleMark"
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:layout_gravity="start|center_vertical"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:background="@drawable/toggle_knob"
+            android:gravity="center"
+            android:text="0"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:textColor="@color/bg_screen"/>
+    </FrameLayout>
+
     <TextView
         android:id="@+id/stateText"
         android:layout_width="wrap_content"
