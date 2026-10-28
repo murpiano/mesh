@@ -56,15 +56,21 @@
                                           VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
                     </Border>
                     <ControlTemplate.Triggers>
+                        <!-- Grows a little under the pointer and sinks under the press, so the
+                             two states read at a glance and not only as a change of shade. -->
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Chrome" Property="Background" Value="{StaticResource BgHover}"/>
+                            <Setter TargetName="Chrome" Property="RenderTransform">
+                                <Setter.Value>
+                                    <ScaleTransform ScaleX="1.08" ScaleY="1.08"/>
+                                </Setter.Value>
+                            </Setter>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
                             <Setter TargetName="Chrome" Property="Background" Value="{StaticResource BgPressed}"/>
-                            <!-- A touch of give under the press, the way the phone's ripple sinks. -->
                             <Setter TargetName="Chrome" Property="RenderTransform">
                                 <Setter.Value>
-                                    <ScaleTransform ScaleX="0.94" ScaleY="0.94"/>
+                                    <ScaleTransform ScaleX="0.96" ScaleY="0.96"/>
                                 </Setter.Value>
                             </Setter>
                         </Trigger>
@@ -115,15 +121,27 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border Name="Chrome" Background="{TemplateBinding Background}">
+                    <Border Name="Chrome" Background="{TemplateBinding Background}"
+                            RenderTransformOrigin="0.5,0.5">
                         <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
+                        <!-- A row is wide, so it swells far less than a button would. -->
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Chrome" Property="Background" Value="{StaticResource BgHover}"/>
+                            <Setter TargetName="Chrome" Property="RenderTransform">
+                                <Setter.Value>
+                                    <ScaleTransform ScaleX="1.02" ScaleY="1.06"/>
+                                </Setter.Value>
+                            </Setter>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
                             <Setter TargetName="Chrome" Property="Background" Value="{StaticResource BgPressed}"/>
+                            <Setter TargetName="Chrome" Property="RenderTransform">
+                                <Setter.Value>
+                                    <ScaleTransform ScaleX="0.995" ScaleY="0.98"/>
+                                </Setter.Value>
+                            </Setter>
                         </Trigger>
                         <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
                             <Setter TargetName="Chrome" Property="Background" Value="{StaticResource BgSelectedActive}"/>

@@ -91,6 +91,8 @@ public partial class MainWindow : Window, IPairingPrompt
     // The device row / chat message whose popup is open, highlighted until it closes.
     private string? _highlightedDeviceUuid;
     private string? _highlightedMsgId;
+    // The bubble holding a text selection, so a click elsewhere can drop it.
+    private TextBox? _selectionBubble;
 
     // All pairing work is marshalled onto the UI thread, so a plain flag is enough to keep
     // a double-click or an incoming connection from racing an attempt already in flight.
@@ -393,20 +395,67 @@ public partial class MainWindow : Window, IPairingPrompt
         if (_chatRows.Count > 0) ChatListBox.ScrollIntoView(_chatRows[^1]);
     }
 
-    /// <summary>A left click on a message's row — on the bubble or beside it — opens its popup.
-    /// A click that ended a drag-selection inside the bubble does not: that was text selection.</summary>
-    private void ChatRow_LeftClick(object sender, MouseButtonEventArgs e)
+    /// <summary>A click on a message bubble opens its menu. A click that ended a drag-selection
+    /// inside the bubble opens the selection's own Copy popup instead.</summary>
+    private void ChatBubble_LeftClick(object sender, MouseButtonEventArgs e)
     {
-        if (sender is not Grid { DataContext: ChatRowVm row } grid) return;
-        if (grid.Children[0] is Border { Child: TextBox { SelectionLength: > 0 } }) return;
+        if (sender is not Border { DataContext: ChatRowVm row } bubble) return;
+        // A drag that selected part of the text is not a click on the message: it gets the one
+        // thing that makes sense for a selection, right under where it ends.
+        if (bubble.Child is TextBox { SelectionLength: > 0 } text)
+        {
+            ShowSelectionCopy(text);
+            return;
+        }
         ShowBubbleMenu(row);
     }
 
-    private void ChatRow_RightClick(object sender, MouseButtonEventArgs e)
+    private void ChatBubble_RightClick(object sender, MouseButtonEventArgs e)
     {
-        if (sender is not Grid { DataContext: ChatRowVm row }) return;
+        if (sender is not Border { DataContext: ChatRowVm row }) return;
         e.Handled = true;
         ShowBubbleMenu(row);
+    }
+
+    /// <summary>The Copy popup for a piece of selected text, placed just under the selection's
+    /// last character rather than in the middle of the window.</summary>
+    private void ShowSelectionCopy(TextBox text)
+    {
+        var selected = text.SelectedText;
+        _selectionBubble = text;
+        var end = text.GetRectFromCharacterIndex(text.SelectionStart + text.SelectionLength, trailingEdge: true);
+        var at = text.TranslatePoint(new Point(end.X, end.Bottom + 6), PopupLayer);
+        _popup.Show(new[] { "Copy" }, _ =>
+        {
+            try { Clipboard.SetText(selected); }
+            catch (COMException ex) { SetStatus($"Clipboard is busy, try again: {ex.Message}"); }
+            ClearChatSelection();
+        }, at: at);
+    }
+
+    /// <summary>Drops the text selection a chat bubble is holding, if any.</summary>
+    private void ClearChatSelection()
+    {
+        _selectionBubble?.Select(0, 0);
+        _selectionBubble = null;
+    }
+
+    /// <summary>A click on the chat page that missed every bubble: it clears what is open rather
+    /// than doing anything of its own (the Android twin is ChatFragment's background tap).</summary>
+    private void ChatBackground_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is DependencyObject source && IsInsideChatBubble(source)) return;
+        _popup.Dismiss();
+        ClearChatSelection();
+    }
+
+    private static bool IsInsideChatBubble(DependencyObject element)
+    {
+        for (var current = element; current != null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (current is Border { DataContext: ChatRowVm }) return true;
+        }
+        return false;
     }
 
     private void ShowBubbleMenu(ChatRowVm row)

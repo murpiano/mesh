@@ -6,10 +6,11 @@
         Foreground="{StaticResource TextPrimary}"
         PreviewMouseDown="Window_PreviewMouseDown" PreviewKeyDown="Window_PreviewKeyDown">
     <Window.Resources>
-        <!-- One chat message row. The row spans the full width with a transparent background, so a
-             click beside the bubble also counts as a click on that message, like on Android. -->
+        <!-- One chat message. Only the bubble itself answers the pointer; the rest of the row is
+             background, where a click clears whatever is open (as on the phone). -->
         <Style x:Key="ChatBubbleBorderStyle" TargetType="Border">
             <Setter Property="HorizontalAlignment" Value="Left"/>
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
             <Setter Property="Background" Value="{StaticResource BgBubblePeer}"/>
             <Setter Property="CornerRadius" Value="14"/>
             <Setter Property="Padding" Value="12,8"/>
@@ -23,6 +24,11 @@
                      click (it opens the message menu). The highlight below still wins. -->
                 <Trigger Property="IsMouseOver" Value="True">
                     <Setter Property="Background" Value="{StaticResource BgBubblePeerHover}"/>
+                    <Setter Property="RenderTransform">
+                        <Setter.Value>
+                            <ScaleTransform ScaleX="1.04" ScaleY="1.04"/>
+                        </Setter.Value>
+                    </Setter>
                 </Trigger>
                 <MultiDataTrigger>
                     <MultiDataTrigger.Conditions>
@@ -37,13 +43,16 @@
             </Style.Triggers>
         </Style>
         <DataTemplate x:Key="ChatBubbleTemplate">
-            <Grid Background="Transparent" Margin="0,2"
-                  PreviewMouseLeftButtonUp="ChatRow_LeftClick" PreviewMouseRightButtonUp="ChatRow_RightClick">
-                <Border Style="{StaticResource ChatBubbleBorderStyle}">
+            <!-- Only the bubble answers clicks; the empty space beside it belongs to the page,
+                 where a click dismisses whatever is open (see ChatBackground_Click). -->
+            <Grid Background="Transparent" Margin="0,2">
+                <Border Style="{StaticResource ChatBubbleBorderStyle}" Cursor="Hand"
+                        PreviewMouseLeftButtonUp="ChatBubble_LeftClick"
+                        PreviewMouseRightButtonUp="ChatBubble_RightClick">
                     <TextBox Name="BubbleText" Text="{Binding Message.DisplayText, Mode=OneWay}"
                              IsReadOnly="True" BorderThickness="0" Background="Transparent" Padding="0"
                              TextWrapping="Wrap" FontSize="15" Foreground="{StaticResource TextPrimary}"
-                             SelectionBrush="{StaticResource BgSelectedActive}"
+                             SelectionBrush="{StaticResource BgSelectedActive}" Cursor="Hand"
                              ContextMenuService.IsEnabled="False"/>
                 </Border>
             </Grid>
@@ -241,7 +250,11 @@
                                Text="Not connected — connect on the Devices tab to send."
                                FontStyle="Italic" FontSize="13" Foreground="{StaticResource TextSecondary}"
                                TextWrapping="Wrap" Margin="0,0,0,4"/>
+                    <!-- Clicking the empty space around the messages clears the open popup and
+                         any text selection, the way tapping the background does on the phone. -->
                     <ListBox Name="ChatListBox" Style="{StaticResource PlainListBox}"
+                             Background="Transparent"
+                             PreviewMouseLeftButtonDown="ChatBackground_Click"
                              ItemTemplate="{StaticResource ChatBubbleTemplate}"/>
                 </DockPanel>
 
