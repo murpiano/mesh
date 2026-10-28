@@ -127,9 +127,10 @@ class DevicesFragment : Fragment(R.layout.fragment_devices) {
             // cancels a connection still being made, or disconnects from this screen; the rest
             // of the row opens the device.
             val toggle = view.findViewById<FrameLayout>(R.id.connectToggle)
+            val track = view.findViewById<FrameLayout>(R.id.toggleTrack)
             val mark = view.findViewById<TextView>(R.id.toggleMark)
             val switchOn = row.isSwitchOn
-            toggle.setBackgroundResource(
+            track.setBackgroundResource(
                 if (switchOn) R.drawable.toggle_track_on else R.drawable.toggle_track_off)
             mark.text = if (switchOn) "I" else "0"
             mark.layoutParams = (mark.layoutParams as FrameLayout.LayoutParams).apply {

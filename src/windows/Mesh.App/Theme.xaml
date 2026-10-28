@@ -166,11 +166,14 @@
          phone. -->
     <Style x:Key="DeviceToggle" TargetType="Button">
         <Setter Property="Focusable" Value="False"/>
-        <Setter Property="Margin" Value="12,0"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
+                    <!-- The transparent padding is the point: the switch is small, so clicks
+                         land around it as often as on it, and every one of those used to open
+                         the device page instead. -->
+                    <Border Background="Transparent" Padding="12,10">
                     <Border Name="Track" Width="38" Height="20" CornerRadius="10"
                             Background="{StaticResource ToggleTrackOff}">
                         <Border Name="Knob" Width="16" Height="16" CornerRadius="8" Margin="2,0"
@@ -179,6 +182,7 @@
                                        Foreground="{StaticResource BgScreen}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
+                    </Border>
                     </Border>
                     <ControlTemplate.Triggers>
                         <DataTrigger Binding="{Binding IsSwitchOn}" Value="True">

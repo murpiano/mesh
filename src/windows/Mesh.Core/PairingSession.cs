@@ -248,6 +248,63 @@ public sealed class PairingSession : IDisposable
         CheckTrust(pairedDevicesPath, uuid, PeerFingerprint) == PeerTrust.Trusted;
 
     /// <summary>
+    /// Shows a prompt the peer is not expected to interrupt, and gives it up the moment the peer
+    /// hangs up: a Connect called off on the other device closes the socket, and this is what
+    /// turns that into the dialog disappearing here instead of sitting out the whole
+    /// user-interaction budget — and, worse, finishing a pairing the other side has already
+    /// walked away from. Returns what the prompt returned, plus whether it was the peer leaving
+    /// that ended it.
+    ///
+    /// Non-destructive on purpose: it polls the socket, never reads it, so a byte the peer did
+    /// send stays in the stream for the protocol step that expects it. Only usable where the
+    /// peer sends nothing while we prompt (the trusted-reconnect confirm and the dialer's code
+    /// entry) — anywhere else, readable data is the peer answering, not leaving. Mirrors
+    /// promptUntilPeerLeaves in PairingSession.kt.
+    /// </summary>
+    private async Task<(T Value, bool PeerLeft)> PromptUntilPeerLeavesAsync<T>(
+        Func<CancellationToken, Task<T>> prompt, T onPeerLeft)
+    {
+        using var cts = new CancellationTokenSource(UserTimeout);
+        var peerLeft = false;
+        var watch = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                try
+                {
+                    // Readable with nothing to read is a FIN; readable with something to read,
+                    // at these points in the protocol, is the TLS close_notify of a peer going
+                    // away. Either way the exchange is over.
+                    if (_client.Client.Poll(0, SelectMode.SelectRead)) { peerLeft = true; cts.Cancel(); return; }
+                }
+                catch (Exception)
+                {
+                    peerLeft = true; // socket already gone
+                    cts.Cancel();
+                    return;
+                }
+                try { await Task.Delay(TimeSpan.FromMilliseconds(200), cts.Token); }
+                catch (OperationCanceledException) { return; }
+            }
+        });
+
+        try
+        {
+            var value = await prompt(cts.Token).WaitAsync(cts.Token);
+            return (value, false);
+        }
+        catch (Exception)
+        {
+            return (onPeerLeft, peerLeft);
+        }
+        finally
+        {
+            cts.Cancel();
+            try { await watch; } catch (Exception) { /* nothing to report */ }
+        }
+    }
+
+    /// <summary>
     /// Runs the whole post-handshake protocol and writes the trust record only on mutual
     /// success. Never throws for network or peer errors: they are reported through the returned
     /// outcome. Does not dispose the session; callers own it (<c>using</c>).
@@ -286,9 +343,12 @@ public sealed class PairingSession : IDisposable
                 {
                     if (!IsDialer)
                     {
-                        bool approved;
-                        try { approved = await prompt.ConfirmReconnectAsync(PeerName!, default).WaitAsync(UserTimeout); }
-                        catch (Exception) { approved = false; }
+                        // The dialer sends nothing until it has read our answer, so anything
+                        // readable here means it hung up — the user called the Connect off on
+                        // that device, and this prompt has to go with it.
+                        var (approved, peerLeft) = await PromptUntilPeerLeavesAsync(
+                            ct => prompt.ConfirmReconnectAsync(PeerName!, ct), false);
+                        if (peerLeft) return Outcome(PairingResult.PairingFailed, "The other device cancelled.");
                         await TrySendAsync(approved ? PairingProtocol.Yes : PairingProtocol.No);
                         if (!approved) return Outcome(PairingResult.PairingFailed, "Declined on the other device.");
                     }
@@ -376,9 +436,11 @@ public sealed class PairingSession : IDisposable
                 if (peerAnswer != PairingProtocol.Yes)
                     return Outcome(PairingResult.PairingFailed, "The other device did not confirm the PIN.");
 
-                string? typed;
-                try { typed = await prompt.EnterPinAsync(PeerName!, promptCts.Token).WaitAsync(UserTimeout); }
-                catch (Exception) { typed = null; }
+                // The listener has had its say and is now waiting on us, so again anything
+                // readable means it hung up while we were typing.
+                var (typed, listenerLeft) = await PromptUntilPeerLeavesAsync(
+                    ct => prompt.EnterPinAsync(PeerName!, ct), (string?)null);
+                if (listenerLeft) return Outcome(PairingResult.PairingFailed, "The other device cancelled.");
                 var matches = typed == pin;
                 await TrySendAsync(matches ? PairingProtocol.Yes : PairingProtocol.No);
                 if (!matches)
