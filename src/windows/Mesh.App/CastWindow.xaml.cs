@@ -1,7 +1,6 @@
 using Mesh.Core;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -60,7 +59,7 @@ public partial class CastWindow : Window
     /// </summary>
     public CastPlacement ApplyPlacement(CastPlacement placement, IReadOnlyList<CastMonitor> monitors)
     {
-        var applied = Correct(placement, monitors);
+        var applied = CastSettings.CorrectPlacement(placement, monitors);
         _mode = applied.Mode;
 
         switch (applied.Mode)
@@ -84,16 +83,6 @@ public partial class CastWindow : Window
         }
 
         return applied;
-    }
-
-    /// <summary>A placement naming a monitor that is gone falls back to the primary one;
-    /// everything else is kept as asked.</summary>
-    public static CastPlacement Correct(CastPlacement placement, IReadOnlyList<CastMonitor> monitors)
-    {
-        if (monitors.Count == 0) return placement;
-        if (monitors.Any(m => m.Id == placement.MonitorId)) return placement;
-        var primary = monitors.FirstOrDefault(m => m.IsPrimary) ?? monitors[0];
-        return placement with { MonitorId = primary.Id };
     }
 
     /// <summary>Where the window is now, in the shape the settings record carries, so moving it

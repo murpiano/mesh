@@ -68,6 +68,19 @@ data class CastSettings(
          * truncation, so the two sides never disagree about what was sent. */
         const val MAX_MONITORS = 16
 
+        /**
+         * The receiving device is the authority on its own monitors: a placement naming one
+         * that is no longer there falls back to the primary monitor, and everything else is
+         * kept as the other device asked. The corrected record goes back over the control
+         * plane, so the two sides end up agreeing on what actually happened.
+         */
+        fun correctPlacement(placement: CastPlacement, monitors: List<CastMonitor>): CastPlacement {
+            if (monitors.isEmpty()) return placement
+            if (monitors.any { it.id == placement.monitorId }) return placement
+            val primary = monitors.firstOrNull { it.isPrimary } ?: monitors[0]
+            return placement.copy(monitorId = primary.id)
+        }
+
         fun write(output: DataOutputStream, settings: CastSettings) {
             require(settings.monitors.size <= MAX_MONITORS) {
                 "Cast settings carry ${settings.monitors.size} monitors (max $MAX_MONITORS)."

@@ -46,6 +46,20 @@ public sealed record CastSettings(
     /// truncation, so the two sides never disagree about what was sent.</summary>
     public const int MaxMonitors = 16;
 
+    /// <summary>
+    /// The receiving device is the authority on its own monitors: a placement naming one that
+    /// is no longer there falls back to the primary monitor, and everything else is kept as the
+    /// other device asked. The corrected record goes back over the control plane, so the two
+    /// sides end up agreeing on what actually happened.
+    /// </summary>
+    public static CastPlacement CorrectPlacement(CastPlacement placement, IReadOnlyList<CastMonitor> monitors)
+    {
+        if (monitors.Count == 0) return placement;
+        if (monitors.Any(m => m.Id == placement.MonitorId)) return placement;
+        var primary = monitors.FirstOrDefault(m => m.IsPrimary) ?? monitors[0];
+        return placement with { MonitorId = primary.Id };
+    }
+
     public static async Task WriteAsync(Stream stream, CastSettings settings)
     {
         if (settings.Monitors.Count > MaxMonitors)

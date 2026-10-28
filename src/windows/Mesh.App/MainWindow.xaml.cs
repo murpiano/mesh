@@ -96,6 +96,8 @@ public partial class MainWindow : Window, IPairingPrompt
     private string? _highlightedMsgId;
     // The bubble holding a text selection, so a click elsewhere can drop it.
     private TextBox? _selectionBubble;
+    // The one cast this PC is currently receiving, if any. One at a time, like the session.
+    private CastSession? _castSession;
 
     // All pairing work is marshalled onto the UI thread, so a plain flag is enough to keep
     // a double-click or an incoming connection from racing an attempt already in flight.
@@ -785,6 +787,7 @@ public partial class MainWindow : Window, IPairingPrompt
         try { await session.SendAsync(new GoodbyeMessage()).WaitAsync(TimeSpan.FromSeconds(2)); }
         catch { /* best effort */ }
         session.Dispose(); // cancels its loops without firing StateChanged (no event to react to)
+        EndCast(null, "The connection to the device ended.");
         RebuildDeviceRows();
     }
 
@@ -1218,6 +1221,16 @@ public partial class MainWindow : Window, IPairingPrompt
                 }
                 Dispatcher.InvokeAsync(() => ReloadChat(peerUuid));
                 return;
+            case CastStartMessage castStart:
+                Dispatcher.InvokeAsync(() => OnCastStartReceived(castStart, peerUuid, peerName, session!));
+                return;
+            case CastSettingsMessage castSettings:
+                Dispatcher.InvokeAsync(() => OnCastSettingsReceived(castSettings, session!));
+                return;
+            case CastStopMessage castStop:
+                Dispatcher.InvokeAsync(() => EndCast(castStop.CastId,
+                    string.IsNullOrEmpty(castStop.Reason) ? "The other device stopped the cast." : castStop.Reason));
+                return;
             case ChatDeleteMessage delete:
                 try { ChatHistoryStore.DeleteMessage(_chatDbPath, peerUuid, delete.Id); }
                 catch (Exception ex)
@@ -1245,6 +1258,59 @@ public partial class MainWindow : Window, IPairingPrompt
         }
         if (entry == null) return; // already had this id (shouldn't happen for a live send, but harmless)
         Dispatcher.InvokeAsync(() => ReloadChat(peerUuid));
+    }
+
+    // Casting (receiving side) ------------------------------------------------------------
+
+    /// <summary>The peer wants to put its screen on this PC. The devices are already paired and
+    /// connected and Android has already made the person confirm the capture, so this does not
+    /// ask again: it opens the media listener and answers with the port and one-time token the
+    /// sender needs (see the design document). Any cast already running is ended first — one at
+    /// a time, like the session itself.</summary>
+    private void OnCastStartReceived(CastStartMessage message, string peerUuid, string peerName, MeshSession session)
+    {
+        EndCast(_castSession?.CastId, "Another cast started.");
+
+        var fingerprint = PairedDeviceStore.Find(_pairedDevicesPath, peerUuid)?.Fingerprint;
+        if (fingerprint == null)
+        {
+            _ = session.SendAsync(new CastStopMessage(message.CastId, "This device is not paired any more."));
+            return;
+        }
+
+        var cast = CastSession.Create(message.CastId, peerUuid, peerName, fingerprint, _identity);
+        cast.SettingsCorrected += settings =>
+            _ = session.SendAsync(new CastSettingsMessage(message.CastId, settings));
+        cast.Ended += reason => Dispatcher.InvokeAsync(() =>
+        {
+            if (_castSession?.CastId != message.CastId) return;
+            _castSession = null;
+            _ = session.SendAsync(new CastStopMessage(message.CastId, reason));
+        });
+
+        _castSession = cast;
+        cast.Start();
+        _ = session.SendAsync(new CastReadyMessage(message.CastId, cast.Port, cast.Token));
+        // The monitor list is this device's to tell, so the phone can offer it right away.
+        _ = session.SendAsync(new CastSettingsMessage(message.CastId, cast.Settings));
+    }
+
+    private void OnCastSettingsReceived(CastSettingsMessage message, MeshSession session)
+    {
+        var cast = _castSession;
+        if (cast == null || cast.CastId != message.CastId) return; // a cast that already ended
+        cast.Apply(message.Settings);
+    }
+
+    /// <summary>Ends the cast with this id, if it is the one running. Used by a stop from the
+    /// peer, by the session dropping, and by unpairing or blacklisting the device.</summary>
+    private void EndCast(string? castId, string reason)
+    {
+        var cast = _castSession;
+        if (cast == null || (castId != null && cast.CastId != castId)) return;
+        _castSession = null;
+        cast.Window.ShowState(reason);
+        cast.Dispose();
     }
 
     /// <summary>Merges the peer's own history for this conversation into ours, deduping by
