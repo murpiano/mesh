@@ -1186,6 +1186,10 @@ public partial class MainWindow : Window, IPairingPrompt
         var connecting = false;
         dialog.PositiveClicked += () =>
         {
+            // Answer first, close second: Close() raises Closed synchronously, and that handler
+            // records the "no" that dismissing a dialog without answering means. Whichever call
+            // lands first is the answer, so closing first would turn every "yes" into a "no".
+            answer.TrySetResult(true);
             if (keepOpenOnYes)
             {
                 connecting = true;
@@ -1197,7 +1201,6 @@ public partial class MainWindow : Window, IPairingPrompt
             {
                 dialog.Close();
             }
-            answer.TrySetResult(true);
         };
         dialog.NegativeClicked += () =>
         {
