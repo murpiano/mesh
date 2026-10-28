@@ -250,11 +250,10 @@
                                Text="Not connected — connect on the Devices tab to send."
                                FontStyle="Italic" FontSize="13" Foreground="{StaticResource TextSecondary}"
                                TextWrapping="Wrap" Margin="0,0,0,4"/>
-                    <!-- Clicking the empty space around the messages clears the open popup and
-                         any text selection, the way tapping the background does on the phone. -->
+                    <!-- A click anywhere that is not the selected message clears the popup and
+                         the selection; Window_PreviewMouseDown does that for the whole window. -->
                     <ListBox Name="ChatListBox" Style="{StaticResource PlainListBox}"
                              Background="Transparent"
-                             PreviewMouseLeftButtonDown="ChatBackground_Click"
                              ItemTemplate="{StaticResource ChatBubbleTemplate}"/>
                 </DockPanel>
 

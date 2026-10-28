@@ -257,12 +257,15 @@ public partial class MainWindow : Window, IPairingPrompt
         if (section == Section.Chat) ScrollChatToEnd();
     }
 
-    /// <summary>Esc closes an open popup, otherwise goes back to the Devices page — the desktop
-    /// counterpart of the Android Back button.</summary>
+    /// <summary>Esc drops a text selection and an open popup, and once nothing is open goes back
+    /// to the Devices page — the desktop counterpart of the Android Back button.</summary>
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Escape || DialogLayer.Children.Count > 0) return;
+        var hadSelection = _selectionBubble != null;
+        ClearChatSelection();
         if (_popup.IsOpen) _popup.Dismiss();
+        else if (hadSelection) { /* the selection was what Esc closed */ }
         else if (_openPeerUuid != null) OpenDevicesPage();
         else return;
         e.Handled = true;
@@ -279,7 +282,14 @@ public partial class MainWindow : Window, IPairingPrompt
             e.Handled = true;
             return;
         }
-        if (_popup.IsOpen && !_popup.IsInside(e.OriginalSource as DependencyObject)) _popup.Dismiss();
+        var source = e.OriginalSource as DependencyObject;
+        if (_popup.IsOpen && !_popup.IsInside(source)) _popup.Dismiss();
+        // Any click that is neither on the selected message itself nor inside the popup it opened
+        // ends the selection: another message, the empty chat space, a button, the header.
+        if (_selectionBubble != null && !_popup.IsInside(source) && !IsWithin(source, _selectionBubble))
+        {
+            ClearChatSelection();
+        }
     }
 
     private void ShowToast(string text)
@@ -440,20 +450,13 @@ public partial class MainWindow : Window, IPairingPrompt
         _selectionBubble = null;
     }
 
-    /// <summary>A click on the chat page that missed every bubble: it clears what is open rather
-    /// than doing anything of its own (the Android twin is ChatFragment's background tap).</summary>
-    private void ChatBackground_Click(object sender, MouseButtonEventArgs e)
-    {
-        if (e.OriginalSource is DependencyObject source && IsInsideChatBubble(source)) return;
-        _popup.Dismiss();
-        ClearChatSelection();
-    }
-
-    private static bool IsInsideChatBubble(DependencyObject element)
+    /// <summary>True if <paramref name="element"/> is <paramref name="ancestor"/> or sits inside
+    /// it.</summary>
+    private static bool IsWithin(DependencyObject? element, DependencyObject ancestor)
     {
         for (var current = element; current != null; current = VisualTreeHelper.GetParent(current))
         {
-            if (current is Border { DataContext: ChatRowVm }) return true;
+            if (ReferenceEquals(current, ancestor)) return true;
         }
         return false;
     }
