@@ -7,7 +7,13 @@
     <SolidColorBrush x:Key="BgCard" Color="#FF242426"/>
     <SolidColorBrush x:Key="BgBubblePeer" Color="#FF2C2C2E"/>
     <SolidColorBrush x:Key="BgBubbleSelf" Color="#FF3A3A3C"/>
+    <SolidColorBrush x:Key="BgBubblePeerHover" Color="#FF35353A"/>
+    <SolidColorBrush x:Key="BgBubbleSelfHover" Color="#FF44444A"/>
     <SolidColorBrush x:Key="BgSelectedActive" Color="#FFFFCC66"/>
+    <!-- What a control looks like under the pointer and while it is being pressed. The phone has
+         no pointer, so its twins (colors.xml) are the ripple and the pressed state. -->
+    <SolidColorBrush x:Key="BgHover" Color="#FF303034"/>
+    <SolidColorBrush x:Key="BgPressed" Color="#FF3E3E44"/>
     <SolidColorBrush x:Key="BgPopup" Color="#FF323234"/>
     <SolidColorBrush x:Key="BgPopupItemPressed" Color="#FF3E3E42"/>
     <SolidColorBrush x:Key="DividerPopup" Color="#FF46464A"/>
@@ -30,26 +36,98 @@
     <SolidColorBrush x:Key="ConnUnpaired" Color="#FFFF3B30"/>
     <SolidColorBrush x:Key="ConnOffline" Color="#FF48484A"/>
 
-    <!-- A button that is just its content (text or glyph): no chrome, no hover box — the Android
-         app's header icons, tabs, Send and popup items are plain text views too. -->
+    <!-- A button that is just its content (text or glyph) until you point at it: then it takes a
+         rounded tint, and a stronger one while held, so every click has something to answer it.
+         The phone's twins are the ripples in drawable/. -->
     <Style x:Key="TextButton" TargetType="Button">
         <Setter Property="Background" Value="Transparent"/>
         <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
         <Setter Property="BorderThickness" Value="0"/>
-        <Setter Property="Padding" Value="0"/>
+        <!-- Room for the hover tint to sit around the text rather than against it. -->
+        <Setter Property="Padding" Value="8,4"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Focusable" Value="False"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                    <Border Name="Chrome" Background="{TemplateBinding Background}" CornerRadius="12"
+                            Padding="{TemplateBinding Padding}" RenderTransformOrigin="0.5,0.5">
                         <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                           VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
                     </Border>
                     <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{StaticResource BgHover}"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{StaticResource BgPressed}"/>
+                            <!-- A touch of give under the press, the way the phone's ripple sinks. -->
+                            <Setter TargetName="Chrome" Property="RenderTransform">
+                                <Setter.Value>
+                                    <ScaleTransform ScaleX="0.94" ScaleY="0.94"/>
+                                </Setter.Value>
+                            </Setter>
+                        </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Opacity" Value="0.4"/>
                         </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- One of the two tabs on a device's page. The active one is marked with Tag="active"
+         rather than a background set from code, so pointing at a tab can still tint it — a local
+         background would outrank every trigger here. -->
+    <Style x:Key="SectionTab" TargetType="Button" BasedOn="{StaticResource TextButton}">
+        <Setter Property="Background" Value="{StaticResource BgHeader}"/>
+        <Setter Property="Padding" Value="0,14,0,12"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Name="Chrome" Background="{TemplateBinding Background}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{StaticResource BgHover}"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{StaticResource BgPressed}"/>
+                        </Trigger>
+                        <!-- Last, so the open tab keeps its own colour under the pointer. -->
+                        <Trigger Property="Tag" Value="active">
+                            <Setter TargetName="Chrome" Property="Background" Value="{StaticResource BgScreen}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A device row: the whole row answers the pointer, and the yellow highlight it wears while
+         its menu is open outranks both pointer states. -->
+    <Style x:Key="DeviceRowButton" TargetType="Button" BasedOn="{StaticResource TextButton}">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Name="Chrome" Background="{TemplateBinding Background}">
+                        <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{StaticResource BgHover}"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{StaticResource BgPressed}"/>
+                        </Trigger>
+                        <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{StaticResource BgSelectedActive}"/>
+                        </DataTrigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
@@ -123,9 +201,12 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="TextBox">
-                    <Border Background="{TemplateBinding Background}" CornerRadius="20"
-                            Padding="{TemplateBinding Padding}">
-                        <ScrollViewer Name="PART_ContentHost" VerticalAlignment="Center"/>
+                    <!-- Padding belongs to the content host, not the border: a TextBox indents its
+                         own text by its Padding too, so putting it on both left the caret of an
+                         empty box a full Padding to the right of the hint text behind it. -->
+                    <Border Background="{TemplateBinding Background}" CornerRadius="20">
+                        <ScrollViewer Name="PART_ContentHost" VerticalAlignment="Center"
+                                      Padding="{TemplateBinding Padding}"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsEnabled" Value="False">

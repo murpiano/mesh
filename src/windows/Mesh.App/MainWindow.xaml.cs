@@ -237,9 +237,9 @@ public partial class MainWindow : Window, IPairingPrompt
 
     private void BackButton_Click(object sender, RoutedEventArgs e) => OpenDevicesPage();
 
-    private void ChatSectionTab_Click(object sender, MouseButtonEventArgs e) => SelectSection(Section.Chat);
+    private void ChatSectionTab_Click(object sender, RoutedEventArgs e) => SelectSection(Section.Chat);
 
-    private void ExplorerSectionTab_Click(object sender, MouseButtonEventArgs e) => SelectSection(Section.Explorer);
+    private void ExplorerSectionTab_Click(object sender, RoutedEventArgs e) => SelectSection(Section.Explorer);
 
     /// <summary>The active section tab reads as a darker patch with brighter text — no underline.</summary>
     private void SelectSection(Section section)
@@ -247,8 +247,9 @@ public partial class MainWindow : Window, IPairingPrompt
         _popup.Dismiss();
         ChatSection.Visibility = section == Section.Chat ? Visibility.Visible : Visibility.Collapsed;
         ExplorerSection.Visibility = section == Section.Explorer ? Visibility.Visible : Visibility.Collapsed;
-        ChatSectionTab.Background = Brush(section == Section.Chat ? "BgScreen" : "BgHeader");
-        ExplorerSectionTab.Background = Brush(section == Section.Explorer ? "BgScreen" : "BgHeader");
+        // Tag, not Background: the style's pointer triggers would lose to a background set here.
+        ChatSectionTab.Tag = section == Section.Chat ? "active" : null;
+        ExplorerSectionTab.Tag = section == Section.Explorer ? "active" : null;
         ChatSectionLabel.Foreground = Brush(section == Section.Chat ? "TextPrimary" : "TextSecondary");
         ExplorerSectionLabel.Foreground = Brush(section == Section.Explorer ? "TextPrimary" : "TextSecondary");
         if (section == Section.Chat) ScrollChatToEnd();
@@ -291,7 +292,7 @@ public partial class MainWindow : Window, IPairingPrompt
 
     /// <summary>Opens a paired device's page. An unpaired device has no chat to show yet — its
     /// popup (right-click) is how it gets paired.</summary>
-    private void DeviceRow_LeftClick(object sender, MouseButtonEventArgs e)
+    private void DeviceRow_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: DeviceRow row } || !row.IsPaired) return;
         OpenDevicePage(row.Uuid, row.Name);

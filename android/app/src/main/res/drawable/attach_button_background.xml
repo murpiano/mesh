@@ -1,5 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <corners android:radius="12dp"/>
-    <solid android:color="@color/bg_bubble_peer"/>
-</shape>
+<!-- The "+" button: its rounded square, plus a ripple and a pressed tint on top of it. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/ripple">
+    <item android:id="@android:id/mask">
+        <shape android:shape="rectangle">
+            <corners android:radius="12dp"/>
+            <solid android:color="#FFFFFFFF"/>
+        </shape>
+    </item>
+    <item>
+        <selector>
+            <item android:state_pressed="true">
+                <shape android:shape="rectangle">
+                    <corners android:radius="12dp"/>
+                    <solid android:color="@color/bg_pressed"/>
+                </shape>
+            </item>
+            <item>
+                <shape android:shape="rectangle">
+                    <corners android:radius="12dp"/>
+                    <solid android:color="@color/bg_bubble_peer"/>
+                </shape>
+            </item>
+        </selector>
+    </item>
+</ripple>

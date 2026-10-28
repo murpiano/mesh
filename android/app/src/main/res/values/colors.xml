@@ -16,6 +16,11 @@
     <color name="bg_popup">#FF323234</color>
     <color name="divider_popup">#FF46464A</color>
 
+    <!-- Touch feedback: the ripple every tappable thing carries, and the tint it holds while
+         pressed. Twins of BgHover/BgPressed in the desktop app's Theme.xaml. -->
+    <color name="ripple">#33FFFFFF</color>
+    <color name="bg_pressed">#FF3E3E44</color>
+
     <color name="text_primary">#FFFFFFFF</color>
     <color name="text_secondary">#FF9A9AA0</color>
     <color name="text_muted">#FFD0D0D4</color>

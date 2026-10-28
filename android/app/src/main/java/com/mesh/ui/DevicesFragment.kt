@@ -1,6 +1,5 @@
 package com.mesh.ui
 
-import android.graphics.Color
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -104,9 +103,9 @@ class DevicesFragment : Fragment(R.layout.fragment_devices) {
                 val column = view.findViewById<FrameLayout>(R.id.statusColumn)
                 column.layoutParams = column.layoutParams.apply { width = columnWidthPx }
             }
-            view.setBackgroundColor(
-                if (row.uuid == selectedUuid) view.context.getColor(R.color.bg_selected_active)
-                else Color.TRANSPARENT)
+            // isActivated, not a background colour: the row's drawable (row_selector) carries
+            // both the highlight and the press ripple, and a colour set here would hide them.
+            view.isActivated = row.uuid == selectedUuid
 
             // Tap opens the device's page; only meaningful once paired (an unpaired device has
             // no chat/history to show there — see the popup below for how to pair it).

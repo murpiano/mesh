@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A section tab: header colour normally, screen colour while it is the open one (isActivated,
+     see DeviceFragment), a ripple on every tap. Twin of SectionTab in Theme.xaml. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/ripple">
+    <item android:id="@android:id/mask">
+        <shape android:shape="rectangle"><solid android:color="#FFFFFFFF"/></shape>
+    </item>
+    <item>
+        <selector>
+            <item android:state_activated="true">
+                <shape android:shape="rectangle"><solid android:color="@color/bg_screen"/></shape>
+            </item>
+            <item android:state_pressed="true">
+                <shape android:shape="rectangle"><solid android:color="@color/bg_pressed"/></shape>
+            </item>
+            <item>
+                <shape android:shape="rectangle"><solid android:color="@color/bg_header"/></shape>
+            </item>
+        </selector>
+    </item>
+</ripple>

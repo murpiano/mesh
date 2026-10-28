@@ -19,6 +19,18 @@
                     <Setter Property="HorizontalAlignment" Value="Right"/>
                     <Setter Property="Background" Value="{StaticResource BgBubbleSelf}"/>
                 </DataTrigger>
+                <!-- A bubble lifts a shade under the pointer, so it reads as something you can
+                     click (it opens the message menu). The highlight below still wins. -->
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource BgBubblePeerHover}"/>
+                </Trigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsOwn}" Value="True"/>
+                        <Condition Binding="{Binding RelativeSource={RelativeSource Self}, Path=IsMouseOver}" Value="True"/>
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="{StaticResource BgBubbleSelfHover}"/>
+                </MultiDataTrigger>
                 <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
                     <Setter Property="Background" Value="{StaticResource BgSelectedActive}"/>
                 </DataTrigger>
@@ -46,6 +58,8 @@
             <Setter Property="Content" Value="&#x2699;"/>
             <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
             <Setter Property="Cursor" Value="Arrow"/>
+            <!-- Nothing behind it yet: it must not light up as if there were. -->
+            <Setter Property="IsHitTestVisible" Value="False"/>
         </Style>
     </Window.Resources>
 
@@ -115,20 +129,9 @@
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Grid Cursor="Hand"
-                                      MouseLeftButtonUp="DeviceRow_LeftClick" MouseRightButtonUp="DeviceRow_RightClick">
-                                    <Grid.Style>
-                                        <!-- Background in the style, not on the Grid: a local value
-                                             would override the highlight trigger. -->
-                                        <Style TargetType="Grid">
-                                            <Setter Property="Background" Value="Transparent"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
-                                                    <Setter Property="Background" Value="{StaticResource BgSelectedActive}"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Grid.Style>
+                                <Button Style="{StaticResource DeviceRowButton}"
+                                        Click="DeviceRow_Click" MouseRightButtonUp="DeviceRow_RightClick">
+                                <Grid Background="Transparent">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" SharedSizeGroup="Status"/>
                                         <ColumnDefinition Width="*"/>
@@ -155,6 +158,7 @@
                                     <TextBlock Grid.Column="2" Text="{Binding StateLabel}" FontSize="14"
                                                Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
                                 </Grid>
+                                </Button>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
@@ -190,16 +194,16 @@
                     <ColumnDefinition/>
                     <ColumnDefinition/>
                 </Grid.ColumnDefinitions>
-                <Border Name="ChatSectionTab" Grid.Column="0" Padding="0,14,0,12" Cursor="Hand"
-                        MouseLeftButtonUp="ChatSectionTab_Click">
+                <Button Name="ChatSectionTab" Grid.Column="0" Style="{StaticResource SectionTab}"
+                        Click="ChatSectionTab_Click">
                     <TextBlock Name="ChatSectionLabel" Text="chat" FontSize="18" FontWeight="Bold"
                                HorizontalAlignment="Center"/>
-                </Border>
-                <Border Name="ExplorerSectionTab" Grid.Column="1" Padding="0,14,0,12" Cursor="Hand"
-                        MouseLeftButtonUp="ExplorerSectionTab_Click">
+                </Button>
+                <Button Name="ExplorerSectionTab" Grid.Column="1" Style="{StaticResource SectionTab}"
+                        Click="ExplorerSectionTab_Click">
                     <TextBlock Name="ExplorerSectionLabel" Text="explorer" FontSize="18" FontWeight="Bold"
                                HorizontalAlignment="Center"/>
-                </Border>
+                </Button>
             </Grid>
             <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource Divider}"/>
 
@@ -212,19 +216,22 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
+                        <!-- Its own rounded background rather than a Border inside, so pointing at
+                             it tints the button itself (see TextButton). -->
                         <Button Name="AttachButton" Style="{StaticResource TextButton}" Width="40" Height="40"
+                                Padding="0" Background="{StaticResource BgBubblePeer}"
                                 VerticalAlignment="Bottom" Click="AttachButton_Click">
-                            <Border Width="40" Height="40" CornerRadius="12" Background="{StaticResource BgBubblePeer}">
-                                <TextBlock Text="+" FontSize="20" Foreground="{StaticResource TextSecondary}"
-                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Border>
+                            <TextBlock Text="+" FontSize="20" Foreground="{StaticResource TextSecondary}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Button>
                         <Grid Grid.Column="1" Margin="8,0,0,0">
                             <TextBox Name="ChatInputBox" Style="{StaticResource DarkTextBox}" TextWrapping="Wrap"
                                      AcceptsReturn="True" MaxHeight="110" VerticalScrollBarVisibility="Auto"
                                      PreviewKeyDown="ChatInputBox_PreviewKeyDown" TextChanged="ChatInputBox_TextChanged"/>
+                            <!-- Left margin matches the input's own Padding, so the hint starts
+                                 exactly where typed text does and the caret sits before its T. -->
                             <TextBlock Name="ChatInputHint" Text="Type a message…" FontSize="15" IsHitTestVisible="False"
-                                       Foreground="{StaticResource TextSecondary}" Margin="18,0,0,0"
+                                       Foreground="{StaticResource TextSecondary}" Margin="16,0,0,0"
                                        VerticalAlignment="Center"/>
                         </Grid>
                         <Button Name="SendButton" Grid.Column="2" Style="{StaticResource TextButton}" Content="Send"

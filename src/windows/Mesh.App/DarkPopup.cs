@@ -85,9 +85,12 @@ public sealed class DarkPopup
                     HorizontalAlignment = HorizontalAlignment.Center
                 }
             };
-            var pressed = (Brush)Application.Current.FindResource("BgPopupItemPressed");
-            item.MouseEnter += (_, _) => item.Background = pressed;
+            // Two steps, as on the phone: a tint under the pointer, a stronger one while held.
+            var hover = (Brush)Application.Current.FindResource("BgPopupItemPressed");
+            var pressed = (Brush)Application.Current.FindResource("BgPressed");
+            item.MouseEnter += (_, _) => item.Background = hover;
             item.MouseLeave += (_, _) => item.Background = Brushes.Transparent;
+            item.MouseLeftButtonDown += (_, _) => item.Background = pressed;
             item.MouseLeftButtonUp += (_, e) =>
             {
                 e.Handled = true;

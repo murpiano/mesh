@@ -157,12 +157,16 @@ public sealed class DarkDialog
             Padding = new Thickness(16, 10, 16, 10), Background = Brushes.Transparent, CornerRadius = new CornerRadius(6),
             Cursor = Cursors.Hand, Child = text
         };
+        // Two steps, as on the phone: a tint under the pointer, a stronger one while held.
         var hover = Brush("BgPopupItemPressed");
+        var pressed = Brush("BgPressed");
         button.MouseEnter += (_, _) => button.Background = hover;
         button.MouseLeave += (_, _) => button.Background = Brushes.Transparent;
+        button.MouseLeftButtonDown += (_, _) => button.Background = pressed;
         button.MouseLeftButtonUp += (_, e) =>
         {
             e.Handled = true;
+            button.Background = hover;
             onClick();
         };
         return (button, text);

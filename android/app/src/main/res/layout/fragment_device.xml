@@ -23,6 +23,8 @@
 
             <TextView
                 android:id="@+id/meshTitle"
+                android:background="@drawable/ripple_rounded"
+                android:padding="6dp"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="start|center_vertical"
@@ -63,6 +65,8 @@
 
             <TextView
                 android:id="@+id/backButton"
+                android:background="@drawable/ripple_rounded"
+                android:padding="6dp"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="start|center_vertical"
@@ -99,6 +103,7 @@
             android:layout_weight="1"
             android:orientation="vertical"
             android:gravity="center_horizontal"
+            android:background="@drawable/tab_selector"
             android:paddingTop="14dp"
             android:paddingBottom="12dp">
 
@@ -118,6 +123,7 @@
             android:layout_weight="1"
             android:orientation="vertical"
             android:gravity="center_horizontal"
+            android:background="@drawable/tab_selector"
             android:paddingTop="14dp"
             android:paddingBottom="12dp">
 
