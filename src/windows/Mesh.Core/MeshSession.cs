@@ -22,8 +22,12 @@ public enum MeshSessionState { Connected, Disconnected, Reconnecting }
 /// </summary>
 public sealed class MeshSession : IDisposable
 {
-    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(20);
-    private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(45);
+    // How fast a link that died quietly — a VPN tunnel dropping, a phone leaving the network —
+    // is noticed, since nothing else reports it: the peer's socket may stay open on its side for
+    // as long as this. Both apps use the same pair of numbers (MeshSession.kt), and the timeout
+    // stays well over twice the interval so one missed heartbeat never ends a healthy session.
+    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(25);
 
     public event Action<MeshMessage>? MessageReceived;
     public event Action<MeshSessionState>? StateChanged;

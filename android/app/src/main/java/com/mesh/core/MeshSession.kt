@@ -40,8 +40,13 @@ class MeshSession private constructor(
     private val idleTimeoutMs: Long = IDLE_TIMEOUT_MS
 ) {
     companion object {
-        private const val HEARTBEAT_INTERVAL_MS = 20_000L
-        private const val IDLE_TIMEOUT_MS = 45_000L
+        // How fast a link that died quietly — a VPN tunnel dropping, a PC leaving the network —
+        // is noticed, since nothing else reports it: this screen can claim "connected" for as
+        // long as this after the other side is gone. Both apps use the same pair of numbers
+        // (MeshSession.cs), and the timeout stays well over twice the interval so one missed
+        // heartbeat never ends a healthy session.
+        private const val HEARTBEAT_INTERVAL_MS = 10_000L
+        private const val IDLE_TIMEOUT_MS = 25_000L
 
         /**
          * Builds a session from an already-open, authenticated transport and starts its
