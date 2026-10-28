@@ -4,6 +4,7 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <application
@@ -23,5 +24,12 @@
             android:name=".core.MeshConnectionService"
             android:exported="false"
             android:foregroundServiceType="dataSync"/>
+
+        <!-- Casting runs under its own service: Android 14 and newer require a service of type
+             mediaProjection to be running before a MediaProjection may be used at all. -->
+        <service
+            android:name=".core.CastService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection"/>
     </application>
 </manifest>
