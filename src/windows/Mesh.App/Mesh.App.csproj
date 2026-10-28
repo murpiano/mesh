@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\Mesh.Core\Mesh.Core.csproj" />
+    <!-- The H.264 decoder that is already part of Windows, reached through managed interop.
+         Bundling a decoder instead would add tens of megabytes to the single-file release. -->
+    <PackageReference Include="Vortice.MediaFoundation" Version="3.8.3" />
   </ItemGroup>
   <PropertyGroup>
     <OutputType>WinExe</OutputType>

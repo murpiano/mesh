@@ -1,0 +1,15 @@
+<Window x:Class="Mesh.App.CastWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Mesh" Width="960" Height="540"
+        Background="{StaticResource BgScreen}"
+        WindowStartupLocation="CenterScreen">
+    <Grid>
+        <!-- The picture, letterboxed: the phone's aspect ratio is kept whatever shape the
+             window is. -->
+        <Image Name="Picture" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
+        <TextBlock Name="StateText" FontSize="16" Foreground="{StaticResource TextSecondary}"
+                   HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap"
+                   TextAlignment="Center" Margin="40"/>
+    </Grid>
+</Window>
