@@ -363,6 +363,13 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
     }
 
     /** Pair button on an unpaired row: first-time pairing, dialer side, asymmetric PIN entry. */
+    /** Aborts an outgoing attempt still in flight (the row's switch flicked back off). Closing
+     * the socket is what stops it: run() fails, and connectOrPair's finally clears the
+     * Connecting state. Same mechanism as the Cancel button on the first-time pairing dialog. */
+    internal fun cancelPendingConnect() {
+        pendingDialerSession?.close()
+    }
+
     internal fun pairDevice(uuid: String) = connectOrPair(uuid, isFirstTimePair = true)
 
     /** Connect button on an already-paired row: manual trusted reconnect, listener gets a

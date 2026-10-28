@@ -158,9 +158,12 @@
     </Style>
 
     <!-- The switch between a device's name and its state. Flicked right and green while that
-         device is connecting or connected, grey and left otherwise; clicking it is what connects
-         and disconnects, while a click anywhere else on the row still opens the device. Twin of
-         toggle_track_on.xml / toggle_track_off.xml on the phone. -->
+         device is connecting or connected, grey and left otherwise; clicking it is what
+         connects, cancels a connection still being made, and disconnects, while a click
+         anywhere else on the row still opens the device. It carries no hover or pressed state
+         of its own — the row under it already answers the pointer, and a switch that also
+         swelled read as two controls. Twin of toggle_track_on.xml / toggle_track_off.xml on the
+         phone. -->
     <Style x:Key="DeviceToggle" TargetType="Button">
         <Setter Property="Focusable" Value="False"/>
         <Setter Property="Margin" Value="12,0"/>
@@ -168,11 +171,11 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border Name="Track" Width="46" Height="26" CornerRadius="13"
-                            Background="{StaticResource ToggleTrackOff}" RenderTransformOrigin="0.5,0.5">
-                        <Border Name="Knob" Width="22" Height="22" CornerRadius="11" Margin="2,0"
+                    <Border Name="Track" Width="38" Height="20" CornerRadius="10"
+                            Background="{StaticResource ToggleTrackOff}">
+                        <Border Name="Knob" Width="16" Height="16" CornerRadius="8" Margin="2,0"
                                 HorizontalAlignment="Left" Background="{StaticResource ToggleKnob}">
-                            <TextBlock Name="Mark" Text="0" FontSize="13" FontWeight="Bold"
+                            <TextBlock Name="Mark" Text="0" FontSize="11" FontWeight="Bold"
                                        Foreground="{StaticResource BgScreen}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
@@ -183,20 +186,6 @@
                             <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/>
                             <Setter TargetName="Mark" Property="Text" Value="I"/>
                         </DataTrigger>
-                        <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Track" Property="RenderTransform">
-                                <Setter.Value>
-                                    <ScaleTransform ScaleX="1.12" ScaleY="1.12"/>
-                                </Setter.Value>
-                            </Setter>
-                        </Trigger>
-                        <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="Track" Property="RenderTransform">
-                                <Setter.Value>
-                                    <ScaleTransform ScaleX="0.94" ScaleY="0.94"/>
-                                </Setter.Value>
-                            </Setter>
-                        </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>

@@ -311,13 +311,22 @@ public partial class MainWindow : Window, IPairingPrompt
     }
 
     /// <summary>The row's 0/1 switch: flicking it on connects (pairing first if this device has
-    /// never been paired), flicking it off drops the session. The click stops here, so the row
-    /// underneath does not open the device page as well.</summary>
+    /// never been paired), flicking it off cancels a connection still being made or drops the
+    /// one that is up. The click stops here, so the row underneath does not open the device page
+    /// as well.</summary>
     private void DeviceToggle_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: DeviceRow row }) return;
         e.Handled = true;
-        HandleDeviceAction(row.IsSwitchOn ? "Disconnect" : "Connect", row);
+        if (row.IsConnecting)
+        {
+            // Closing the socket is what aborts an attempt in flight: RunAsync fails, and
+            // ConnectOrPairAsync's finally clears the Connecting state and the switch with it.
+            // Same mechanism as the Cancel button on the first-time pairing dialog.
+            _pendingDialerSession?.Dispose();
+            return;
+        }
+        HandleDeviceAction(row.IsConnectedNow ? "Disconnect" : "Connect", row);
     }
 
     /// <summary>Right-click (the Android long-press): this device's actions, with its row

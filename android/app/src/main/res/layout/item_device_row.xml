@@ -29,8 +29,8 @@
 
     <FrameLayout
         android:id="@+id/connectToggle"
-        android:layout_width="46dp"
-        android:layout_height="26dp"
+        android:layout_width="38dp"
+        android:layout_height="20dp"
         android:layout_marginStart="12dp"
         android:layout_marginEnd="12dp"
         android:background="@drawable/toggle_track_off"
@@ -39,15 +39,15 @@
 
         <TextView
             android:id="@+id/toggleMark"
-            android:layout_width="22dp"
-            android:layout_height="22dp"
+            android:layout_width="16dp"
+            android:layout_height="16dp"
             android:layout_gravity="start|center_vertical"
             android:layout_marginStart="2dp"
             android:layout_marginEnd="2dp"
             android:background="@drawable/toggle_knob"
             android:gravity="center"
             android:text="0"
-            android:textSize="13sp"
+            android:textSize="11sp"
             android:textStyle="bold"
             android:textColor="@color/bg_screen"/>
     </FrameLayout>

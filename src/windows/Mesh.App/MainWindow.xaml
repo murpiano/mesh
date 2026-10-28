@@ -111,14 +111,15 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" SharedSizeGroup="Status"/>
                             <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="70"/>
-                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="62"/>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="State"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="Devices" FontSize="17" FontWeight="Bold" Height="0" Visibility="Hidden"/>
                         <TextBlock Text="Status" FontSize="13" FontWeight="Bold" Foreground="{StaticResource TextSecondary}"
                                    HorizontalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Name" FontSize="13" FontWeight="Bold"
                                    Foreground="{StaticResource TextSecondary}"/>
+                        <TextBlock Grid.Column="3" Text="Connecting" FontSize="14" Height="0" Visibility="Hidden"/>
                         <TextBlock Grid.Column="3" Text="State" FontSize="13" FontWeight="Bold"
                                    Foreground="{StaticResource TextSecondary}"/>
                     </Grid>
@@ -146,7 +147,7 @@
                                         <ColumnDefinition Width="Auto" SharedSizeGroup="Status"/>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="State"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Text="Devices" FontSize="17" FontWeight="Bold" Height="0" Visibility="Hidden"/>
                                     <Ellipse Width="14" Height="14" HorizontalAlignment="Center" VerticalAlignment="Center"
@@ -168,6 +169,7 @@
                                                TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
                                     <Button Grid.Column="2" Style="{StaticResource DeviceToggle}"
                                             Click="DeviceToggle_Click"/>
+                                    <TextBlock Grid.Column="3" Text="Connecting" FontSize="14" Height="0" Visibility="Hidden"/>
                                     <TextBlock Grid.Column="3" Text="{Binding StateLabel}" FontSize="14"
                                                Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
                                 </Grid>

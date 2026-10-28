@@ -1,20 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- A device row's 0/1 switch while it is off: a grey track, with the tap ripple every other
-     tappable thing carries. Twin of the DeviceToggle style in the desktop app's Theme.xaml. -->
-<ripple xmlns:android="http://schemas.android.com/apk/res/android"
-    android:color="@color/ripple">
-
-    <item android:id="@android:id/mask">
-        <shape android:shape="rectangle">
-            <solid android:color="#FFFFFFFF"/>
-            <corners android:radius="13dp"/>
-        </shape>
-    </item>
-
-    <item>
-        <shape android:shape="rectangle">
-            <solid android:color="@color/toggle_track_off"/>
-            <corners android:radius="13dp"/>
-        </shape>
-    </item>
-</ripple>
+<!-- A device row's 0/1 switch while it is off: a grey track. It carries no ripple — the row
+     under it already answers the tap. Twin of the DeviceToggle style in Theme.xaml. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/toggle_track_off"/>
+    <corners android:radius="10dp"/>
+</shape>
