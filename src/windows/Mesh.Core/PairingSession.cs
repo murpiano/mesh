@@ -260,7 +260,7 @@ public sealed class PairingSession : IDisposable
     /// background reconnect, which must stay silent on both sides.
     /// </summary>
     public async Task<PairingOutcome> RunAsync(string selfUuid, string selfName, string pairedDevicesPath,
-        IPairingPrompt prompt, bool isManualConnect = false)
+        IPairingPrompt prompt, bool isManualConnect = false, Func<string, bool>? isBlocked = null)
     {
         PeerTrust trust;
         bool peerRequestsConfirmation;
@@ -269,6 +269,12 @@ public sealed class PairingSession : IDisposable
         {
             await ExchangeIdentityAsync(selfUuid, selfName);
             peerRequestsConfirmation = await ExchangeManualIntentAsync(isManualConnect);
+            // The blacklist check, as a callback so this file stays free of the blocked-device
+            // store. Asked once the peer has said who it is and before anything is decided
+            // about it: a blocked peer is simply hung up on, with no prompt on either side.
+            // Mirrors isBlocked in PairingSession.kt.
+            if (isBlocked != null && isBlocked(PeerUuid!))
+                return Outcome(PairingResult.PairingFailed, "Blocked.");
             trust = CheckTrust(pairedDevicesPath, PeerUuid!, PeerFingerprint);
             if (await ExchangeTrustAsync(trust == PeerTrust.Trusted))
             {

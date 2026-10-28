@@ -39,6 +39,7 @@ class DevicesFragment : Fragment(R.layout.fragment_devices) {
         list.adapter = adapter
         view.findViewById<Button>(R.id.refreshButton).setOnClickListener { mainActivity.startDiscovery() }
         view.findViewById<View>(R.id.meshTitle).setOnClickListener { mainActivity.openDevicesPage() }
+        view.findViewById<View>(R.id.settingsButton).setOnClickListener { mainActivity.openSettingsPage() }
 
         // The "Status" column (header + every row's dot) is exactly as wide as the word
         // "Devices" in the (now centered) card title above it, so the header never wraps and the
@@ -167,19 +168,16 @@ class DevicesFragment : Fragment(R.layout.fragment_devices) {
             return view
         }
 
-        /** Mirrors the design spec: not paired → just Connect (which pairs); paired but not
-         * connected → Connect + Unpair; connected → Disconnect + Unpair. */
-        private fun actionsFor(row: DeviceRow): List<String> = when {
-            !row.isPaired -> listOf("Connect")
-            row.isConnectedNow -> listOf("Disconnect", "Unpair")
-            else -> listOf("Connect", "Unpair")
-        }
+        /** Connecting and disconnecting live on the row's switch now, so the popup is left with
+         * what is permanent: drop the pairing, or block the device outright. A device that was
+         * never paired has no pairing to drop. */
+        private fun actionsFor(row: DeviceRow): List<String> =
+            if (row.isPaired) listOf("Unpair", "Blacklist") else listOf("Blacklist")
 
         private fun handleAction(action: String, row: DeviceRow) {
             when (action) {
-                "Connect" -> if (row.isPaired) mainActivity.connectDevice(row.uuid) else mainActivity.pairDevice(row.uuid)
-                "Disconnect" -> mainActivity.disconnectMeshSession()
                 "Unpair" -> mainActivity.unpairDevice(row.uuid)
+                "Blacklist" -> mainActivity.blacklistDevice(row.uuid)
             }
         }
     }

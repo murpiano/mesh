@@ -286,7 +286,12 @@ class PairingSession private constructor(
         selfName: String,
         dao: PairedDeviceDao,
         prompt: PairingPrompt,
-        isManualConnect: Boolean = false
+        isManualConnect: Boolean = false,
+        // The blacklist check, as a callback so this file stays free of the blocked-device
+        // store. Asked once the peer has said who it is and before anything is decided about
+        // it: a blocked peer is simply hung up on, with no prompt on either side. Mirrors
+        // isBlocked in PairingSession.cs.
+        isBlocked: (suspend (String) -> Boolean)? = null
     ): PairingOutcome {
         val trust: PeerTrust
         val peerRequestsConfirmation: Boolean
@@ -295,6 +300,9 @@ class PairingSession private constructor(
             exchangeIdentity(selfUuid, selfName)
             peerRequestsConfirmation = exchangeManualIntent(isManualConnect)
             val uuid = peerUuid!!
+            if (isBlocked != null && isBlocked(uuid)) {
+                return outcome(PairingResult.PAIRING_FAILED, "Blocked.")
+            }
             trust = checkTrust(dao, uuid, peerFingerprint)
             DebugLog.write("PairingSession.run: isDialer=$isDialer isManualConnect=$isManualConnect " +
                 "peerUuid=$uuid localTrust=$trust peerFingerprint=$peerFingerprint " +

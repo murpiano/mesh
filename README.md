@@ -11,7 +11,7 @@ Mesh links a Windows PC and an Android phone on the same local network so they c
 
 ## What you can do
 
-Open Mesh on both devices and they find each other on the network. Right-click a device on the PC, or hold it on the phone, and pick Connect. The first time, the receiving device shows a 6-digit code and asks to allow the connection, and the other device types that code in. After that, Connect only asks the other side to allow it. Click a device to open its chat: send text, copy any message, edit or delete your own. Edits and deletes show up on both devices. Each device keeps the last 50 messages per peer, and a message can be up to 1,048,576 characters long.
+Open Mesh on both devices and they find each other on the network. Every device in the list carries a switch: flick it on to connect, off to drop the connection or call off one still being made. The first time, the receiving device shows a 6-digit code and asks to allow the connection, and the other device types that code in. After that, the switch only asks the other side to allow it. Right-click a device on the PC, or hold it on the phone, to unpair it or blacklist it — a blacklisted device leaves the list and every connection it tries is refused, until it is let back in from the gear's Settings screen. Click a device to open its chat: send text, copy any message, edit or delete your own. Edits and deletes show up on both devices. Each device keeps the last 50 messages per peer, and a message can be up to 1,048,576 characters long.
 
 ## How it works
 

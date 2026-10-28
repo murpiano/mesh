@@ -28,6 +28,7 @@ public partial class MainWindow : Window, IPairingPrompt
 {
     private static readonly string MeshDir = MeshApp.DataDir;
     private readonly string _pairedDevicesPath = Path.Combine(MeshDir, "paired_devices.json");
+    private readonly string _blockedDevicesPath = Path.Combine(MeshDir, "blocked_devices.json");
     private readonly string _chatDbPath = Path.Combine(MeshDir, "chat_history.db");
 
     /// <summary>Chat message texts longer than this are neither stored nor sent. Shared with the
@@ -74,6 +75,8 @@ public partial class MainWindow : Window, IPairingPrompt
     // merged with PairedDeviceStore (on disk) into _deviceRows, the unified list the UI binds to.
     private readonly Dictionary<string, DiscoveredDevice> _discovered = new();
     private readonly ObservableCollection<DeviceRow> _deviceRows = new();
+    // The Settings page's blacklist, same "replace, don't mutate" convention as _deviceRows.
+    private readonly ObservableCollection<BlockedDevice> _blockedRows = new();
     private readonly X509Certificate2 _identity;
     private readonly string _selfUuid;
     private readonly string _selfName = Environment.MachineName + MeshApp.DeviceNameSuffix;
@@ -177,6 +180,7 @@ public partial class MainWindow : Window, IPairingPrompt
         InitializeComponent();
         Title = MeshApp.Name;
         DeviceListBox.ItemsSource = _deviceRows;
+        BlockedListBox.ItemsSource = _blockedRows;
         ChatListBox.ItemsSource = _chatRows;
         _popup = new DarkPopup(PopupLayer);
         _toastTimer.Tick += (_, _) =>
@@ -218,6 +222,7 @@ public partial class MainWindow : Window, IPairingPrompt
         _openPeerUuid = uuid;
         DeviceNameText.Text = name;
         DevicesPage.Visibility = Visibility.Collapsed;
+        SettingsPage.Visibility = Visibility.Collapsed;
         DevicePage.Visibility = Visibility.Visible;
         ChatInputBox.Clear();
         SelectSection(Section.Chat);
@@ -232,8 +237,23 @@ public partial class MainWindow : Window, IPairingPrompt
         _openPeerUuid = null;
         _chatRows.Clear();
         DevicePage.Visibility = Visibility.Collapsed;
+        SettingsPage.Visibility = Visibility.Collapsed;
         DevicesPage.Visibility = Visibility.Visible;
     }
+
+    /// <summary>The gear: the Settings page, which so far holds the blacklist.</summary>
+    private void OpenSettingsPage()
+    {
+        _popup.Dismiss();
+        _openPeerUuid = null;
+        _chatRows.Clear();
+        RebuildBlockedRows();
+        DevicePage.Visibility = Visibility.Collapsed;
+        DevicesPage.Visibility = Visibility.Collapsed;
+        SettingsPage.Visibility = Visibility.Visible;
+    }
+
+    private void GearButton_Click(object sender, RoutedEventArgs e) => OpenSettingsPage();
 
     private void MeshTitle_Click(object sender, RoutedEventArgs e) => OpenDevicesPage();
 
@@ -266,7 +286,7 @@ public partial class MainWindow : Window, IPairingPrompt
         ClearChatSelection();
         if (_popup.IsOpen) _popup.Dismiss();
         else if (hadSelection) { /* the selection was what Esc closed */ }
-        else if (_openPeerUuid != null) OpenDevicesPage();
+        else if (_openPeerUuid != null || SettingsPage.Visibility == Visibility.Visible) OpenDevicesPage();
         else return;
         e.Handled = true;
     }
@@ -276,7 +296,8 @@ public partial class MainWindow : Window, IPairingPrompt
     /// "back" side button goes back to the Devices page.</summary>
     private void Window_PreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ChangedButton == MouseButton.XButton1 && _openPeerUuid != null && DialogLayer.Children.Count == 0)
+        if (e.ChangedButton == MouseButton.XButton1 && DialogLayer.Children.Count == 0 &&
+            (_openPeerUuid != null || SettingsPage.Visibility == Visibility.Visible))
         {
             OpenDevicesPage();
             e.Handled = true;
@@ -344,12 +365,11 @@ public partial class MainWindow : Window, IPairingPrompt
         RebuildDeviceRows();
     }
 
-    /// <summary>Not paired: Connect (which pairs). Paired but not connected: Connect, Unpair.
-    /// Connected: Disconnect, Unpair.</summary>
+    /// <summary>Connecting and disconnecting live on the row's switch now, so the popup is left
+    /// with what is permanent: drop the pairing, or block the device outright. A device that was
+    /// never paired has no pairing to drop.</summary>
     private static IReadOnlyList<string> ActionsFor(DeviceRow row) =>
-        !row.IsPaired ? new[] { "Connect" }
-        : row.IsConnectedNow ? new[] { "Disconnect", "Unpair" }
-        : new[] { "Connect", "Unpair" };
+        row.IsPaired ? new[] { "Unpair", "Blacklist" } : new[] { "Blacklist" };
 
     private async void HandleDeviceAction(string action, DeviceRow row)
     {
@@ -368,6 +388,9 @@ public partial class MainWindow : Window, IPairingPrompt
                 break;
             case "Unpair":
                 await UnpairDeviceAsync(row);
+                break;
+            case "Blacklist":
+                await BlacklistDeviceAsync(row);
                 break;
         }
     }
@@ -602,6 +625,9 @@ public partial class MainWindow : Window, IPairingPrompt
         var uuids = new HashSet<string>(paired.Keys);
         uuids.UnionWith(_discovered.Keys);
         uuids.Remove(_selfUuid);
+        // A blacklisted device is not on this screen at all — the Settings page is where it can
+        // be found and let back in.
+        foreach (var blocked in BlockedDeviceStore.Load(_blockedDevicesPath)) uuids.Remove(blocked.Uuid);
 
         var rows = uuids.Select(uuid =>
         {
@@ -651,7 +677,8 @@ public partial class MainWindow : Window, IPairingPrompt
         _pendingIncomingSession = session;
         try
         {
-            var outcome = await session.RunAsync(_selfUuid, _selfName, _pairedDevicesPath, this);
+            var outcome = await session.RunAsync(_selfUuid, _selfName, _pairedDevicesPath, this,
+                isBlocked: IsDeviceBlocked);
             DebugLog.Write($"HandleIncomingAsync: RunAsync result={outcome.Result} detail={outcome.Detail}");
             var peerName = outcome.PeerName ?? session.PeerIp;
             SetStatus(OutcomeText(outcome, peerName));
@@ -715,7 +742,7 @@ public partial class MainWindow : Window, IPairingPrompt
             using (session)
             {
                 var outcome = await session.RunAsync(_selfUuid, _selfName, _pairedDevicesPath, this,
-                    isManualConnect: true);
+                    isManualConnect: true, isBlocked: IsDeviceBlocked);
                 var peerName = outcome.PeerName ?? target.Name;
                 SetStatus(OutcomeText(outcome, peerName));
                 if (outcome.Result is PairingResult.Paired or PairingResult.Reconnected)
@@ -803,6 +830,51 @@ public partial class MainWindow : Window, IPairingPrompt
         ChatHistoryStore.DeleteForPeer(_chatDbPath, target.Uuid);
         if (_openPeerUuid == target.Uuid) OpenDevicesPage();
         RebuildDeviceRows();
+    }
+
+    /// <summary>Whether this device is blacklisted. Passed into every pairing attempt, incoming
+    /// and outgoing, so a blocked peer is hung up on as soon as it says who it is.</summary>
+    private bool IsDeviceBlocked(string uuid) => BlockedDeviceStore.IsBlocked(_blockedDevicesPath, uuid);
+
+    /// <summary>Blocks the device, after confirmation: the live session (or the attempt still
+    /// being made) ends, the pairing and the chat go the way <see cref="UnpairDeviceAsync"/>
+    /// takes them, and the device drops off the Devices page until it is let back in from the
+    /// Settings page.</summary>
+    private async Task BlacklistDeviceAsync(DeviceRow target)
+    {
+        var confirmed = await ShowConfirmAsync("Blacklist",
+            $"Block {target.Name}? It leaves the device list and its connections are refused.",
+            "Block", "Cancel", CancellationToken.None);
+        if (!confirmed) return;
+
+        if (target.IsConnecting) _pendingDialerSession?.Dispose();
+        if (_meshPeerUuid == target.Uuid) await DisconnectCurrentSessionAsync();
+        PairedDeviceStore.Remove(_pairedDevicesPath, target.Uuid);
+        ChatHistoryStore.DeleteForPeer(_chatDbPath, target.Uuid);
+        BlockedDeviceStore.Add(_blockedDevicesPath,
+            new BlockedDevice { Uuid = target.Uuid, Name = target.Name, BlockedAt = DateTimeOffset.UtcNow });
+        if (_openPeerUuid == target.Uuid) OpenDevicesPage();
+        RebuildDeviceRows();
+        RebuildBlockedRows();
+    }
+
+    /// <summary>Settings page: lets a blocked device back in. It comes back as an ordinary
+    /// unpaired device — blocking dropped the pairing, so the two have to pair again.</summary>
+    private void UnblockButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: BlockedDevice blocked }) return;
+        BlockedDeviceStore.Remove(_blockedDevicesPath, blocked.Uuid);
+        RebuildBlockedRows();
+        RebuildDeviceRows();
+    }
+
+    private void RebuildBlockedRows()
+    {
+        _blockedRows.Clear();
+        foreach (var blocked in BlockedDeviceStore.Load(_blockedDevicesPath)
+                     .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
+            _blockedRows.Add(blocked);
+        NoBlockedDevicesText.Visibility = _blockedRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     // Mesh session lifecycle -------------------------------------------------------------

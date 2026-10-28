@@ -44,6 +44,7 @@ class DeviceFragment : Fragment(R.layout.fragment_device) {
         view.findViewById<TextView>(R.id.deviceNameText).text = peerName
         view.findViewById<View>(R.id.backButton).setOnClickListener { mainActivity.openDevicesPage() }
         view.findViewById<View>(R.id.meshTitle).setOnClickListener { mainActivity.openDevicesPage() }
+        view.findViewById<View>(R.id.settingsButton).setOnClickListener { mainActivity.openSettingsPage() }
 
         statusStripe = view.findViewById(R.id.connectionStatusStripe)
         statusLabel = view.findViewById(R.id.connectionStatusLabel)

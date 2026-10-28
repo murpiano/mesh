@@ -66,9 +66,6 @@
         <Style x:Key="GearButton" TargetType="Button" BasedOn="{StaticResource TextButton}">
             <Setter Property="Content" Value="&#x2699;"/>
             <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
-            <Setter Property="Cursor" Value="Arrow"/>
-            <!-- Nothing behind it yet: it must not light up as if there were. -->
-            <Setter Property="IsHitTestVisible" Value="False"/>
         </Style>
     </Window.Resources>
 
@@ -80,7 +77,7 @@
                     <Button Style="{StaticResource HeaderTitle}" HorizontalAlignment="Left"
                             Click="MeshTitle_Click"/>
                     <Button Style="{StaticResource GearButton}" FontSize="22" HorizontalAlignment="Right"
-                            VerticalAlignment="Center"/>
+                            VerticalAlignment="Center" Click="GearButton_Click"/>
                 </Grid>
             </Border>
 
@@ -181,6 +178,52 @@
             </Border>
         </DockPanel>
 
+        <!-- Settings page (Android: fragment_settings.xml) -->
+        <DockPanel Name="SettingsPage" Visibility="Collapsed">
+            <Border DockPanel.Dock="Top" Background="{StaticResource BgHeader}" Padding="20,16">
+                <Grid>
+                    <Button Style="{StaticResource HeaderTitle}" HorizontalAlignment="Left"
+                            Click="MeshTitle_Click"/>
+                    <TextBlock Text="Settings" FontSize="22" Foreground="{StaticResource TextSecondary}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+
+            <Border Background="{StaticResource BgCard}" CornerRadius="12" Margin="16" Padding="16">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Blacklist" FontSize="17" FontWeight="Bold"
+                               HorizontalAlignment="Center" Margin="0,0,0,12"/>
+                    <TextBlock Grid.Row="1" Name="NoBlockedDevicesText" Text="No blocked devices."
+                               FontSize="14" Foreground="{StaticResource TextSecondary}"/>
+                    <ListBox Grid.Row="2" Name="BlockedListBox" Style="{StaticResource PlainListBox}">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource PlainListBoxItem}"/>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Name}" FontSize="16"
+                                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                    <Button Grid.Column="1" Style="{StaticResource TextButton}" Content="Remove"
+                                            FontSize="14" Foreground="{StaticResource ActionPositive}"
+                                            Click="UnblockButton_Click"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+        </DockPanel>
+
         <!-- Device page (Android: fragment_device.xml) -->
         <DockPanel Name="DevicePage" Visibility="Collapsed">
             <Border DockPanel.Dock="Top" Background="{StaticResource BgHeader}" Padding="20,16,20,2">
@@ -192,7 +235,7 @@
                                    HorizontalAlignment="Center" VerticalAlignment="Center"
                                    TextTrimming="CharacterEllipsis" MaxWidth="200"/>
                         <Button Style="{StaticResource GearButton}" FontSize="20" HorizontalAlignment="Right"
-                                VerticalAlignment="Center"/>
+                                VerticalAlignment="Center" Click="GearButton_Click"/>
                     </Grid>
                     <Grid Margin="0,2,0,0">
                         <Button Style="{StaticResource TextButton}" Content="&#x2190;" FontSize="22"
