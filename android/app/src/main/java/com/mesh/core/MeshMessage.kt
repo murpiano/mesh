@@ -12,7 +12,7 @@ import java.io.IOException
  *  1. tag              1 byte (via [PairingProtocol.writeByte]): 0x01 = ChatSend,
  *                       0x02 = Heartbeat, 0x03 = Goodbye, 0x04 = ChatHistorySync,
  *                       0x05 = ChatEdit, 0x06 = ChatDelete, 0x07 = CastStart,
- *                       0x08 = CastReady, 0x09 = CastStop
+ *                       0x08 = CastReady, 0x09 = CastStop, 0x0A = CastSettingsUpdate
  *  2. id                ChatSend only: short string (via [PairingProtocol.writeString])
  *  3. timestamp         ChatSend only: 8 bytes, big-endian ms (DataOutputStream.writeLong)
  *  4. text              ChatSend only: u32 big-endian byte length + UTF-8 bytes, max
@@ -33,6 +33,7 @@ sealed class MeshMessage {
         private const val CAST_START_TAG = 0x07
         private const val CAST_READY_TAG = 0x08
         private const val CAST_STOP_TAG = 0x09
+        private const val CAST_SETTINGS_TAG = 0x0A
 
         /**
          * 1 MiB of UTF-16 code units expands to at most 3 bytes per code unit in UTF-8 (a
@@ -95,6 +96,11 @@ sealed class MeshMessage {
                     writePort(output, message.port)
                     PairingProtocol.writeString(output, message.token)
                 }
+                is CastSettingsUpdate -> {
+                    PairingProtocol.writeByte(output, CAST_SETTINGS_TAG)
+                    PairingProtocol.writeString(output, message.castId)
+                    CastSettings.write(output, message.settings)
+                }
                 is CastStop -> {
                     PairingProtocol.writeByte(output, CAST_STOP_TAG)
                     PairingProtocol.writeString(output, message.castId)
@@ -142,6 +148,8 @@ sealed class MeshMessage {
                     CastReady(castId, port, PairingProtocol.readString(input))
                 }
                 CAST_STOP_TAG -> CastStop(PairingProtocol.readString(input), PairingProtocol.readString(input))
+                CAST_SETTINGS_TAG ->
+                    CastSettingsUpdate(PairingProtocol.readString(input), CastSettings.read(input))
                 else -> throw EOFException("Unknown message tag: $tag")
             }
         }
@@ -204,6 +212,12 @@ data class CastStart(val castId: String) : MeshMessage()
  * sender has to present there (see CastChannel). The token is what keeps another device on the
  * network from walking into a listener that is briefly open. */
 data class CastReady(val castId: String, val port: Int, val token: String) : MeshMessage()
+
+/** The whole settings record of a running cast, sent by whichever side changed any of it. The
+ * receiver of this message applies what it owns (the window placement) and the sender applies
+ * what it owns (quality, audio); a side that cannot satisfy a record sends back the corrected
+ * one. */
+data class CastSettingsUpdate(val castId: String, val settings: CastSettings) : MeshMessage()
 
 /** Ends a cast, from either side. [reason] is shown to the other user when it is not empty —
  * an empty one means "the person on this side stopped it". */

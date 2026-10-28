@@ -14,6 +14,7 @@ public abstract class MeshMessage
     private const byte CastStartTag = 0x07;
     private const byte CastReadyTag = 0x08;
     private const byte CastStopTag = 0x09;
+    private const byte CastSettingsTag = 0x0A;
 
     /// <summary>
     /// Upper bound on a chat message's UTF-8 byte length. 1 MiB of UTF-16 code units expands to
@@ -86,6 +87,11 @@ public abstract class MeshMessage
                 await WritePortAsync(stream, castReady.Port);
                 await PairingProtocol.WriteStringAsync(stream, castReady.Token);
                 break;
+            case CastSettingsMessage castSettings:
+                await PairingProtocol.WriteByteAsync(stream, CastSettingsTag);
+                await PairingProtocol.WriteStringAsync(stream, castSettings.CastId);
+                await CastSettings.WriteAsync(stream, castSettings.Settings);
+                break;
             case CastStopMessage castStop:
                 await PairingProtocol.WriteByteAsync(stream, CastStopTag);
                 await PairingProtocol.WriteStringAsync(stream, castStop.CastId);
@@ -112,6 +118,8 @@ public abstract class MeshMessage
             CastReadyTag => await ReadCastReadyAsync(stream),
             CastStopTag => new CastStopMessage(await PairingProtocol.ReadStringAsync(stream),
                 await PairingProtocol.ReadStringAsync(stream)),
+            CastSettingsTag => new CastSettingsMessage(await PairingProtocol.ReadStringAsync(stream),
+                await CastSettings.ReadAsync(stream)),
             _ => throw new InvalidDataException($"Unknown message tag: {tag}")
         };
     }
@@ -258,6 +266,16 @@ public sealed class CastReadyMessage(string castId, int port, string token) : Me
     public string CastId { get; } = castId;
     public int Port { get; } = port;
     public string Token { get; } = token;
+}
+
+/// <summary>The whole settings record of a running cast, sent by whichever side changed any of
+/// it. The receiver of this message applies what it owns (the window placement) and the sender
+/// applies what it owns (quality, audio); a side that cannot satisfy a record sends back the
+/// corrected one.</summary>
+public sealed class CastSettingsMessage(string castId, CastSettings settings) : MeshMessage
+{
+    public string CastId { get; } = castId;
+    public CastSettings Settings { get; } = settings;
 }
 
 /// <summary>Ends a cast, from either side. <see cref="Reason"/> is shown to the other user when
