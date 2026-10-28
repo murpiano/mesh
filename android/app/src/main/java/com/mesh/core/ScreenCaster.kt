@@ -39,6 +39,7 @@ class ScreenCaster(
     private var pump: Job? = null
     private var profile: CastProfile? = null
     private var stopped = false
+    private val audio = AudioCaster(projection, channel, scope)
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -81,8 +82,22 @@ class ScreenCaster(
         restart(CastQuality.profileFor(quality, screenWidth, screenHeight))
     }
 
+    /** Switches the phone's sound on or off while the cast runs. Only apps that allow being
+     * captured are heard — see [AudioCaster]. */
+    fun setAudioEnabled(enabled: Boolean) {
+        if (!audio.isSupported) return
+        if (enabled) {
+            runCatching { audio.start() }.onFailure {
+                end("The phone could not capture its audio: ${it.message ?: it.javaClass.simpleName}")
+            }
+        } else {
+            audio.stop()
+        }
+    }
+
     fun stop() {
         stopped = true
+        audio.stop()
         releaseEncoder()
         runCatching { projection.unregisterCallback(projectionCallback) }
         runCatching { projection.stop() }
@@ -175,6 +190,7 @@ class ScreenCaster(
     private fun end(reason: String) {
         if (stopped) return
         stopped = true
+        audio.stop()
         releaseEncoder()
         runCatching { projection.unregisterCallback(projectionCallback) }
         runCatching { projection.stop() }
