@@ -52,6 +52,54 @@ public class MeshMessageTests
     }
 
     [Fact]
+    public async Task CastStart_RoundTrips()
+    {
+        using var stream = new MemoryStream();
+        var castId = Guid.NewGuid().ToString();
+        await MeshMessage.WriteAsync(stream, new CastStartMessage(castId));
+        stream.Position = 0;
+
+        var received = await MeshMessage.ReadAsync(stream);
+
+        var start = Assert.IsType<CastStartMessage>(received);
+        Assert.Equal(castId, start.CastId);
+    }
+
+    [Fact]
+    public async Task CastReady_RoundTrips()
+    {
+        using var stream = new MemoryStream();
+        var castId = Guid.NewGuid().ToString();
+        var token = new string('t', 43);
+        await MeshMessage.WriteAsync(stream, new CastReadyMessage(castId, 65535, token));
+        stream.Position = 0;
+
+        var received = await MeshMessage.ReadAsync(stream);
+
+        var ready = Assert.IsType<CastReadyMessage>(received);
+        Assert.Equal(castId, ready.CastId);
+        Assert.Equal(65535, ready.Port);
+        Assert.Equal(token, ready.Token);
+    }
+
+    [Fact]
+    public async Task CastStop_RoundTrips()
+    {
+        using var stream = new MemoryStream();
+        var castId = Guid.NewGuid().ToString();
+        await MeshMessage.WriteAsync(stream, new CastStopMessage(castId, ""));
+        await MeshMessage.WriteAsync(stream, new CastStopMessage(castId, "the window was closed"));
+        stream.Position = 0;
+
+        var withoutReason = Assert.IsType<CastStopMessage>(await MeshMessage.ReadAsync(stream));
+        var withReason = Assert.IsType<CastStopMessage>(await MeshMessage.ReadAsync(stream));
+
+        Assert.Equal(castId, withoutReason.CastId);
+        Assert.Equal("", withoutReason.Reason);
+        Assert.Equal("the window was closed", withReason.Reason);
+    }
+
+    [Fact]
     public async Task Heartbeat_RoundTrips()
     {
         using var stream = new MemoryStream();

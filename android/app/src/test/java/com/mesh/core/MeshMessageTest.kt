@@ -40,6 +40,51 @@ class MeshMessageTest {
     }
 
     @Test
+    fun `cast start round trips`() {
+        val out = ByteArrayOutputStream()
+        MeshMessage.write(DataOutputStream(out), CastStart("cast-1"))
+
+        val received = MeshMessage.read(DataInputStream(ByteArrayInputStream(out.toByteArray())))
+
+        assertTrue(received is CastStart)
+        received as CastStart
+        assertEquals("cast-1", received.castId)
+    }
+
+    @Test
+    fun `cast ready round trips`() {
+        val out = ByteArrayOutputStream()
+        val token = "t".repeat(43)
+        MeshMessage.write(DataOutputStream(out), CastReady("cast-1", 65535, token))
+
+        val received = MeshMessage.read(DataInputStream(ByteArrayInputStream(out.toByteArray())))
+
+        assertTrue(received is CastReady)
+        received as CastReady
+        assertEquals("cast-1", received.castId)
+        assertEquals(65535, received.port)
+        assertEquals(token, received.token)
+    }
+
+    @Test
+    fun `cast stop round trips`() {
+        val out = ByteArrayOutputStream()
+        MeshMessage.write(DataOutputStream(out), CastStop("cast-1", ""))
+        MeshMessage.write(DataOutputStream(out), CastStop("cast-1", "the window was closed"))
+
+        val input = DataInputStream(ByteArrayInputStream(out.toByteArray()))
+        val withoutReason = MeshMessage.read(input)
+        val withReason = MeshMessage.read(input)
+
+        assertTrue(withoutReason is CastStop)
+        withoutReason as CastStop
+        withReason as CastStop
+        assertEquals("cast-1", withoutReason.castId)
+        assertEquals("", withoutReason.reason)
+        assertEquals("the window was closed", withReason.reason)
+    }
+
+    @Test
     fun `chat delete round trips`() {
         val out = ByteArrayOutputStream()
         MeshMessage.write(DataOutputStream(out), ChatDelete("msg-1"))

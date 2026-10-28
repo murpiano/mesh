@@ -10,7 +10,9 @@ import java.io.IOException
  * src/windows/Mesh.Core/MeshMessage.cs.
  *
  *  1. tag              1 byte (via [PairingProtocol.writeByte]): 0x01 = ChatSend,
- *                       0x02 = Heartbeat, 0x03 = Goodbye, 0x04 = ChatHistorySync
+ *                       0x02 = Heartbeat, 0x03 = Goodbye, 0x04 = ChatHistorySync,
+ *                       0x05 = ChatEdit, 0x06 = ChatDelete, 0x07 = CastStart,
+ *                       0x08 = CastReady, 0x09 = CastStop
  *  2. id                ChatSend only: short string (via [PairingProtocol.writeString])
  *  3. timestamp         ChatSend only: 8 bytes, big-endian ms (DataOutputStream.writeLong)
  *  4. text              ChatSend only: u32 big-endian byte length + UTF-8 bytes, max
@@ -28,6 +30,9 @@ sealed class MeshMessage {
         private const val CHAT_HISTORY_SYNC_TAG = 0x04
         private const val CHAT_EDIT_TAG = 0x05
         private const val CHAT_DELETE_TAG = 0x06
+        private const val CAST_START_TAG = 0x07
+        private const val CAST_READY_TAG = 0x08
+        private const val CAST_STOP_TAG = 0x09
 
         /**
          * 1 MiB of UTF-16 code units expands to at most 3 bytes per code unit in UTF-8 (a
@@ -80,6 +85,21 @@ sealed class MeshMessage {
                     PairingProtocol.writeByte(output, CHAT_DELETE_TAG)
                     PairingProtocol.writeString(output, message.id)
                 }
+                is CastStart -> {
+                    PairingProtocol.writeByte(output, CAST_START_TAG)
+                    PairingProtocol.writeString(output, message.castId)
+                }
+                is CastReady -> {
+                    PairingProtocol.writeByte(output, CAST_READY_TAG)
+                    PairingProtocol.writeString(output, message.castId)
+                    writePort(output, message.port)
+                    PairingProtocol.writeString(output, message.token)
+                }
+                is CastStop -> {
+                    PairingProtocol.writeByte(output, CAST_STOP_TAG)
+                    PairingProtocol.writeString(output, message.castId)
+                    PairingProtocol.writeString(output, message.reason)
+                }
             }
             output.flush()
         }
@@ -115,9 +135,23 @@ sealed class MeshMessage {
                     ChatEdit(id, text)
                 }
                 CHAT_DELETE_TAG -> ChatDelete(PairingProtocol.readString(input))
+                CAST_START_TAG -> CastStart(PairingProtocol.readString(input))
+                CAST_READY_TAG -> {
+                    val castId = PairingProtocol.readString(input)
+                    val port = readPort(input)
+                    CastReady(castId, port, PairingProtocol.readString(input))
+                }
+                CAST_STOP_TAG -> CastStop(PairingProtocol.readString(input), PairingProtocol.readString(input))
                 else -> throw EOFException("Unknown message tag: $tag")
             }
         }
+
+        private fun writePort(output: DataOutputStream, port: Int) {
+            require(port in 1..65535) { "Port $port out of range." }
+            output.writeShort(port) // DataOutputStream.writeShort is big-endian
+        }
+
+        private fun readPort(input: DataInputStream): Int = input.readUnsignedShort()
 
         private fun writeText(output: DataOutputStream, text: String) {
             val bytes = text.toByteArray(Charsets.UTF_8)
@@ -160,6 +194,20 @@ data class ChatHistorySync(val entries: List<ChatSyncEntry>) : MeshMessage()
 /** [senderUuid] is a device uuid (either side's), not perspective-relative, so the receiver can
  * tell whether an entry replayed back to it is one it originally sent. */
 data class ChatSyncEntry(val id: String, val senderUuid: String, val timestamp: Long, val text: String)
+
+/** Sent by the device that wants to cast its screen: "I am about to send you a picture". The
+ * receiver answers with [CastReady]. The cast id ties the start, the settings and the stop of
+ * one cast together, so a late message from a cast that already ended is easy to drop. */
+data class CastStart(val castId: String) : MeshMessage()
+
+/** The receiver's answer: the port its media-plane listener is on, and the one-time token the
+ * sender has to present there (see CastChannel). The token is what keeps another device on the
+ * network from walking into a listener that is briefly open. */
+data class CastReady(val castId: String, val port: Int, val token: String) : MeshMessage()
+
+/** Ends a cast, from either side. [reason] is shown to the other user when it is not empty —
+ * an empty one means "the person on this side stopped it". */
+data class CastStop(val castId: String, val reason: String) : MeshMessage()
 
 /** Edits an own message already seen by the peer. Sent live only while connected to that peer;
  * if disconnected, the local store still changes but the peer is not retried later. */

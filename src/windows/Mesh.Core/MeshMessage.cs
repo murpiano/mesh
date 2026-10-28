@@ -11,6 +11,9 @@ public abstract class MeshMessage
     private const byte ChatHistorySyncTag = 0x04;
     private const byte ChatEditTag = 0x05;
     private const byte ChatDeleteTag = 0x06;
+    private const byte CastStartTag = 0x07;
+    private const byte CastReadyTag = 0x08;
+    private const byte CastStopTag = 0x09;
 
     /// <summary>
     /// Upper bound on a chat message's UTF-8 byte length. 1 MiB of UTF-16 code units expands to
@@ -73,6 +76,21 @@ public abstract class MeshMessage
                 await PairingProtocol.WriteByteAsync(stream, ChatDeleteTag);
                 await PairingProtocol.WriteStringAsync(stream, delete.Id);
                 break;
+            case CastStartMessage castStart:
+                await PairingProtocol.WriteByteAsync(stream, CastStartTag);
+                await PairingProtocol.WriteStringAsync(stream, castStart.CastId);
+                break;
+            case CastReadyMessage castReady:
+                await PairingProtocol.WriteByteAsync(stream, CastReadyTag);
+                await PairingProtocol.WriteStringAsync(stream, castReady.CastId);
+                await WritePortAsync(stream, castReady.Port);
+                await PairingProtocol.WriteStringAsync(stream, castReady.Token);
+                break;
+            case CastStopMessage castStop:
+                await PairingProtocol.WriteByteAsync(stream, CastStopTag);
+                await PairingProtocol.WriteStringAsync(stream, castStop.CastId);
+                await PairingProtocol.WriteStringAsync(stream, castStop.Reason);
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(message), "Unknown message type.");
         }
@@ -90,6 +108,10 @@ public abstract class MeshMessage
             ChatHistorySyncTag => await ReadChatHistorySyncAsync(stream),
             ChatEditTag => new ChatEditMessage(await PairingProtocol.ReadStringAsync(stream), await ReadTextAsync(stream)),
             ChatDeleteTag => new ChatDeleteMessage(await PairingProtocol.ReadStringAsync(stream)),
+            CastStartTag => new CastStartMessage(await PairingProtocol.ReadStringAsync(stream)),
+            CastReadyTag => await ReadCastReadyAsync(stream),
+            CastStopTag => new CastStopMessage(await PairingProtocol.ReadStringAsync(stream),
+                await PairingProtocol.ReadStringAsync(stream)),
             _ => throw new InvalidDataException($"Unknown message tag: {tag}")
         };
     }
@@ -118,6 +140,28 @@ public abstract class MeshMessage
             entries.Add(new ChatSyncEntry(id, senderUuid, timestamp, text));
         }
         return new ChatHistorySyncMessage(entries);
+    }
+
+    private static async Task<CastReadyMessage> ReadCastReadyAsync(Stream stream)
+    {
+        var castId = await PairingProtocol.ReadStringAsync(stream);
+        var port = await ReadPortAsync(stream);
+        var token = await PairingProtocol.ReadStringAsync(stream);
+        return new CastReadyMessage(castId, port, token);
+    }
+
+    private static async Task WritePortAsync(Stream stream, int port)
+    {
+        if (port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(port), "Port out of range.");
+        var bytes = new byte[2];
+        BinaryPrimitives.WriteUInt16BigEndian(bytes, (ushort)port);
+        await PairingProtocol.WriteBytesAsync(stream, bytes);
+    }
+
+    private static async Task<int> ReadPortAsync(Stream stream)
+    {
+        var bytes = await PairingProtocol.ReadBytesAsync(stream, 2);
+        return BinaryPrimitives.ReadUInt16BigEndian(bytes);
     }
 
     private static async Task WriteTimestampAsync(Stream stream, DateTimeOffset timestamp)
@@ -195,6 +239,33 @@ public sealed class ChatEditMessage(string id, string text) : MeshMessage
 public sealed class ChatDeleteMessage(string id) : MeshMessage
 {
     public string Id { get; } = id;
+}
+
+/// <summary>Sent by the device that wants to cast its screen: "I am about to send you a
+/// picture". The receiver answers with <see cref="CastReadyMessage"/>. The cast id ties the
+/// start, the settings and the stop of one cast together, so a late message from a cast that
+/// already ended is easy to drop.</summary>
+public sealed class CastStartMessage(string castId) : MeshMessage
+{
+    public string CastId { get; } = castId;
+}
+
+/// <summary>The receiver's answer: the port its media-plane listener is on, and the one-time
+/// token the sender has to present there (see CastChannel). The token is what keeps another
+/// device on the network from walking into a listener that is briefly open.</summary>
+public sealed class CastReadyMessage(string castId, int port, string token) : MeshMessage
+{
+    public string CastId { get; } = castId;
+    public int Port { get; } = port;
+    public string Token { get; } = token;
+}
+
+/// <summary>Ends a cast, from either side. <see cref="Reason"/> is shown to the other user when
+/// it is not empty — an empty one means "the person on this side stopped it".</summary>
+public sealed class CastStopMessage(string castId, string reason) : MeshMessage
+{
+    public string CastId { get; } = castId;
+    public string Reason { get; } = reason;
 }
 
 public sealed class HeartbeatMessage : MeshMessage;
