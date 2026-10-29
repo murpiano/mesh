@@ -251,13 +251,20 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition/>
                     <ColumnDefinition/>
+                    <ColumnDefinition/>
                 </Grid.ColumnDefinitions>
                 <Button Name="ChatSectionTab" Grid.Column="0" Style="{StaticResource SectionTab}"
                         Click="ChatSectionTab_Click">
                     <TextBlock Name="ChatSectionLabel" Text="chat" FontSize="18" FontWeight="Bold"
                                HorizontalAlignment="Center"/>
                 </Button>
-                <Button Name="ExplorerSectionTab" Grid.Column="1" Style="{StaticResource SectionTab}"
+                <!-- Only while this device is casting to this PC — see RefreshCastSection. -->
+                <Button Name="CastSectionTab" Grid.Column="1" Style="{StaticResource SectionTab}"
+                        Visibility="Collapsed" Click="CastSectionTab_Click">
+                    <TextBlock Name="CastSectionLabel" Text="cast" FontSize="18" FontWeight="Bold"
+                               HorizontalAlignment="Center"/>
+                </Button>
+                <Button Name="ExplorerSectionTab" Grid.Column="2" Style="{StaticResource SectionTab}"
                         Click="ExplorerSectionTab_Click">
                     <TextBlock Name="ExplorerSectionLabel" Text="explorer" FontSize="18" FontWeight="Bold"
                                HorizontalAlignment="Center"/>
@@ -305,6 +312,27 @@
                              Background="Transparent"
                              ItemTemplate="{StaticResource ChatBubbleTemplate}"/>
                 </DockPanel>
+
+                <!-- Cast section: the same three settings the phone shows, so a running cast
+                     can be steered from either device (Android: fragment_cast_controls.xml). -->
+                <StackPanel Name="CastSection" Visibility="Collapsed" Margin="20">
+                    <TextBlock Name="CastStateText" FontSize="14" TextWrapping="Wrap"
+                               Foreground="{StaticResource TextSecondary}"/>
+                    <Button Name="CastStopButton" Style="{StaticResource TextButton}" Content="Stop the cast"
+                            FontSize="15" HorizontalAlignment="Left" Margin="0,16,0,0"
+                            Click="CastStopButton_Click"/>
+                    <TextBlock Name="CastQualityLabel" FontSize="15" Margin="0,24,0,4"
+                               Foreground="{StaticResource TextPrimary}"/>
+                    <Slider Name="CastQualitySlider" Minimum="0" Maximum="100" IsSnapToTickEnabled="True"
+                            TickFrequency="1" ValueChanged="CastQualitySlider_ValueChanged"/>
+                    <CheckBox Name="CastAudioCheck" Margin="0,20,0,0" FontSize="15"
+                              Foreground="{StaticResource TextPrimary}"
+                              Content="Play the phone's sound here"
+                              Checked="CastAudioCheck_Changed" Unchecked="CastAudioCheck_Changed"/>
+                    <TextBlock Text="Where this PC shows it" FontSize="15" Margin="0,24,0,4"
+                               Foreground="{StaticResource TextPrimary}"/>
+                    <StackPanel Name="CastPlacementList"/>
+                </StackPanel>
 
                 <!-- Explorer section (Android: fragment_explorer.xml) -->
                 <TextBlock Name="ExplorerSection" Visibility="Collapsed" Text="Coming soon" FontSize="15"

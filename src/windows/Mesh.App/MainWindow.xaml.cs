@@ -68,7 +68,7 @@ public partial class MainWindow : Window, IPairingPrompt
     /// Same four states and colors as the Android app.</summary>
     private enum ConnectionStatus { Connected, Disconnected, Unpaired, Offline }
 
-    private enum Section { Chat, Explorer }
+    private enum Section { Chat, Cast, Explorer }
 
     private readonly MeshDiscovery _discovery = new();
     // Live mDNS presence, keyed by uuid. Source of truth for "is this device online right now";
@@ -230,6 +230,7 @@ public partial class MainWindow : Window, IPairingPrompt
         SelectSection(Section.Chat);
         ReloadChat(uuid);
         RefreshDevicePageState();
+        RefreshCastSection();
     }
 
     private void OpenDevicesPage()
@@ -265,16 +266,21 @@ public partial class MainWindow : Window, IPairingPrompt
 
     private void ExplorerSectionTab_Click(object sender, RoutedEventArgs e) => SelectSection(Section.Explorer);
 
+    private void CastSectionTab_Click(object sender, RoutedEventArgs e) => SelectSection(Section.Cast);
+
     /// <summary>The active section tab reads as a darker patch with brighter text — no underline.</summary>
     private void SelectSection(Section section)
     {
         _popup.Dismiss();
         ChatSection.Visibility = section == Section.Chat ? Visibility.Visible : Visibility.Collapsed;
+        CastSection.Visibility = section == Section.Cast ? Visibility.Visible : Visibility.Collapsed;
         ExplorerSection.Visibility = section == Section.Explorer ? Visibility.Visible : Visibility.Collapsed;
         // Tag, not Background: the style's pointer triggers would lose to a background set here.
         ChatSectionTab.Tag = section == Section.Chat ? "active" : null;
+        CastSectionTab.Tag = section == Section.Cast ? "active" : null;
         ExplorerSectionTab.Tag = section == Section.Explorer ? "active" : null;
         ChatSectionLabel.Foreground = Brush(section == Section.Chat ? "TextPrimary" : "TextSecondary");
+        CastSectionLabel.Foreground = Brush(section == Section.Cast ? "TextPrimary" : "TextSecondary");
         ExplorerSectionLabel.Foreground = Brush(section == Section.Explorer ? "TextPrimary" : "TextSecondary");
         if (section == Section.Chat) ScrollChatToEnd();
     }
@@ -1263,6 +1269,114 @@ public partial class MainWindow : Window, IPairingPrompt
 
     // Casting (receiving side) ------------------------------------------------------------
 
+    // Cast controls ---------------------------------------------------------------------
+
+    // Set while the controls are being redrawn from a settings record, so the handlers below do
+    // not mistake it for the user moving a control and send it straight back.
+    private bool _renderingCast;
+
+    /// <summary>Shows or hides the cast tab for the device page that is open and redraws its
+    /// controls. The tab is there only while that device is casting to this PC.</summary>
+    private void RefreshCastSection()
+    {
+        var cast = _castSession;
+        var running = cast != null && cast.PeerUuid == _openPeerUuid;
+        CastSectionTab.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+        if (!running)
+        {
+            if (CastSection.Visibility == Visibility.Visible) SelectSection(Section.Chat);
+            return;
+        }
+
+        var settings = cast!.Settings;
+        _renderingCast = true;
+        CastStateText.Text = $"{DeviceNameText.Text}'s screen is showing on this PC.";
+        CastQualitySlider.Value = settings.Quality;
+        CastQualityLabel.Text = $"Quality {settings.Quality} — 0 is smooth, 100 is sharp";
+        CastAudioCheck.IsChecked = settings.Audio;
+        BuildCastPlacementChoices(settings);
+        _renderingCast = false;
+    }
+
+    /// <summary>One choice per place this PC can put the window: a window, each monitor full
+    /// screen, and all of them at once.</summary>
+    private void BuildCastPlacementChoices(CastSettings settings)
+    {
+        CastPlacementList.Children.Clear();
+        var choices = new List<(string Label, CastPlacement Placement)>
+        {
+            ("A window", settings.Placement with { Mode = CastPlacementMode.Window })
+        };
+        foreach (var monitor in settings.Monitors)
+        {
+            choices.Add(($"{monitor.Name}, full screen",
+                settings.Placement with { Mode = CastPlacementMode.Fullscreen, MonitorId = monitor.Id }));
+        }
+        if (settings.Monitors.Count > 1)
+            choices.Add(("Across every monitor", settings.Placement with { Mode = CastPlacementMode.AllMonitors }));
+
+        foreach (var (label, placement) in choices)
+        {
+            var button = new RadioButton
+            {
+                Content = label,
+                FontSize = 14,
+                Margin = new Thickness(0, 4, 0, 0),
+                Foreground = Brush("TextPrimary"),
+                GroupName = "CastPlacement",
+                IsChecked = PlacementMatches(placement, settings.Placement)
+            };
+            button.Checked += (_, _) =>
+            {
+                if (_renderingCast) return;
+                SendCastSettings(s => s with { Placement = placement });
+            };
+            CastPlacementList.Children.Add(button);
+        }
+    }
+
+    private static bool PlacementMatches(CastPlacement choice, CastPlacement current) =>
+        choice.Mode == current.Mode &&
+        (choice.Mode != CastPlacementMode.Fullscreen || choice.MonitorId == current.MonitorId);
+
+    private void CastQualitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        var quality = (int)e.NewValue;
+        CastQualityLabel.Text = $"Quality {quality} — 0 is smooth, 100 is sharp";
+        if (_renderingCast) return;
+        SendCastSettings(s => s with { Quality = quality });
+    }
+
+    private void CastAudioCheck_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_renderingCast) return;
+        var audio = CastAudioCheck.IsChecked == true;
+        SendCastSettings(s => s with { Audio = audio });
+    }
+
+    private void CastStopButton_Click(object sender, RoutedEventArgs e)
+    {
+        var cast = _castSession;
+        if (cast == null) return;
+        var session = _meshSession;
+        if (session != null && _meshPeerUuid == cast.PeerUuid)
+            _ = session.SendAsync(new CastStopMessage(cast.CastId, "The PC stopped the cast."));
+        EndCast(cast.CastId, "The cast was stopped on this PC.");
+    }
+
+    /// <summary>A control on this PC moved: apply the whole record here — this device decides
+    /// where its own window goes — and send what was actually applied to the phone.</summary>
+    private void SendCastSettings(Func<CastSettings, CastSettings> change)
+    {
+        var cast = _castSession;
+        if (cast == null) return;
+        var applied = cast.Apply(change(cast.Settings));
+        RefreshCastSection();
+        var session = _meshSession;
+        if (session != null && _meshPeerUuid == cast.PeerUuid)
+            _ = session.SendAsync(new CastSettingsMessage(cast.CastId, applied));
+    }
+
     /// <summary>The peer wants to put its screen on this PC. The devices are already paired and
     /// connected and Android has already made the person confirm the capture, so this does not
     /// ask again: it opens the media listener and answers with the port and one-time token the
@@ -1280,17 +1394,22 @@ public partial class MainWindow : Window, IPairingPrompt
         }
 
         var cast = CastSession.Create(message.CastId, peerUuid, peerName, fingerprint, _identity);
-        cast.SettingsCorrected += settings =>
+        cast.SettingsCorrected += settings => Dispatcher.InvokeAsync(() =>
+        {
+            RefreshCastSection();
             _ = session.SendAsync(new CastSettingsMessage(message.CastId, settings));
+        });
         cast.Ended += reason => Dispatcher.InvokeAsync(() =>
         {
             if (_castSession?.CastId != message.CastId) return;
             _castSession = null;
+            RefreshCastSection();
             _ = session.SendAsync(new CastStopMessage(message.CastId, reason));
         });
 
         _castSession = cast;
         cast.Start();
+        RefreshCastSection();
         _ = session.SendAsync(new CastReadyMessage(message.CastId, cast.Port, cast.Token));
         // The monitor list is this device's to tell, so the phone can offer it right away.
         _ = session.SendAsync(new CastSettingsMessage(message.CastId, cast.Settings));
@@ -1301,6 +1420,7 @@ public partial class MainWindow : Window, IPairingPrompt
         var cast = _castSession;
         if (cast == null || cast.CastId != message.CastId) return; // a cast that already ended
         cast.Apply(message.Settings);
+        RefreshCastSection();
     }
 
     /// <summary>Ends the cast with this id, if it is the one running. Used by a stop from the
@@ -1312,6 +1432,7 @@ public partial class MainWindow : Window, IPairingPrompt
         _castSession = null;
         cast.Window.ShowState(reason);
         cast.Dispose();
+        RefreshCastSection();
     }
 
     /// <summary>Merges the peer's own history for this conversation into ours, deduping by
