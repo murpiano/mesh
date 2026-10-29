@@ -34,8 +34,10 @@ class DeviceFragment : Fragment(R.layout.fragment_device) {
     private var statusLabel: TextView? = null
     private var chatTab: View? = null
     private var explorerTab: View? = null
+    private var castTab: View? = null
     private var chatLabel: TextView? = null
     private var explorerLabel: TextView? = null
+    private var castLabel: TextView? = null
 
     private val mainActivity: MainActivity get() = requireActivity() as MainActivity
 
@@ -52,12 +54,16 @@ class DeviceFragment : Fragment(R.layout.fragment_device) {
         explorerTab = view.findViewById(R.id.explorerSectionTab)
         chatLabel = view.findViewById(R.id.chatSectionLabel)
         explorerLabel = view.findViewById(R.id.explorerSectionLabel)
+        castTab = view.findViewById(R.id.castSectionTab)
+        castLabel = view.findViewById(R.id.castSectionLabel)
 
         chatTab?.setOnClickListener { selectSection(Section.CHAT) }
         explorerTab?.setOnClickListener { selectSection(Section.EXPLORER) }
+        castTab?.setOnClickListener { selectSection(Section.CAST) }
 
         selectSection(Section.CHAT)
         refreshConnectionState()
+        refreshCastSection()
     }
 
     override fun onDestroyView() {
@@ -68,20 +74,28 @@ class DeviceFragment : Fragment(R.layout.fragment_device) {
         explorerTab = null
         chatLabel = null
         explorerLabel = null
+        castTab = null
+        castLabel = null
     }
 
-    private enum class Section { CHAT, EXPLORER }
+    private enum class Section { CHAT, EXPLORER, CAST }
 
     private fun selectSection(section: Section) {
-        val fragment = if (section == Section.CHAT) ChatFragment.newInstance(peerUuid) else ExplorerFragment()
+        val fragment = when (section) {
+            Section.CHAT -> ChatFragment.newInstance(peerUuid)
+            Section.EXPLORER -> ExplorerFragment()
+            Section.CAST -> CastControlsFragment.newInstance(peerUuid)
+        }
         childFragmentManager.beginTransaction().replace(R.id.deviceChildContainer, fragment).commit()
 
         // isActivated, not a background colour: tab_selector carries both the open tab's colour
         // and the ripple, and a colour set here would hide them.
         chatTab?.isActivated = section == Section.CHAT
         explorerTab?.isActivated = section == Section.EXPLORER
+        castTab?.isActivated = section == Section.CAST
         chatLabel?.setTextColor(sectionColor(section == Section.CHAT))
         explorerLabel?.setTextColor(sectionColor(section == Section.EXPLORER))
+        castLabel?.setTextColor(sectionColor(section == Section.CAST))
     }
 
     private fun sectionColor(active: Boolean) =
@@ -89,6 +103,24 @@ class DeviceFragment : Fragment(R.layout.fragment_device) {
 
     /** The chat section's own fragment, if it's the one currently showing — used by
      * [MainActivity.notifyChatChanged] to live-refresh whichever chat is on screen. */
+    /** The cast section's own fragment, if it is the one currently showing. */
+    private fun castChild(): CastControlsFragment? =
+        childFragmentManager.findFragmentById(R.id.deviceChildContainer) as? CastControlsFragment
+
+    /**
+     * Shows or hides the cast tab and redraws its controls. The tab is there only while this
+     * device is connected and announced that it understands casting — an older build would
+     * close the connection on the cast messages. A cast that is running keeps the tab even if
+     * the row's state lags behind.
+     */
+    fun refreshCastSection() {
+        val available = mainActivity.isCasting(peerUuid) ||
+            (mainActivity.peerSupportsCast(peerUuid) && mainActivity.isActivePeer(peerUuid))
+        castTab?.visibility = if (available) View.VISIBLE else View.GONE
+        if (!available && castTab?.isActivated == true) selectSection(Section.CHAT)
+        castChild()?.render()
+    }
+
     fun chatChild(): ChatFragment? = childFragmentManager.findFragmentById(R.id.deviceChildContainer) as? ChatFragment
 
     /** Updates the status stripe color and, if the chat section is showing, its Send-enabled
@@ -101,5 +133,6 @@ class DeviceFragment : Fragment(R.layout.fragment_device) {
         statusLabel?.text = status.label
         statusLabel?.setTextColor(color)
         chatChild()?.refreshConnectionState()
+        refreshCastSection()
     }
 }

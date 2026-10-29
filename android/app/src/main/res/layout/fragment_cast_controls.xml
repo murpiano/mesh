@@ -1,0 +1,82 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_screen"
+    android:padding="20dp">
+
+    <TextView
+        android:id="@+id/castStateText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="@color/text_secondary"
+        android:textSize="14sp"/>
+
+    <Button
+        android:id="@+id/castToggleButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="Cast this screen"/>
+
+    <!-- Everything below only means anything while a cast runs; it is hidden otherwise. -->
+    <LinearLayout
+        android:id="@+id/castSettingsGroup"
+        android:orientation="vertical"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/castQualityLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp"/>
+
+        <!-- 0 is smooth (more frames, scaled down), 100 is sharp (native size, fewer frames) —
+             see CastQuality. -->
+        <SeekBar
+            android:id="@+id/castQualitySlider"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:max="100"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginTop="20dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Send this phone's sound"
+                android:textColor="@color/text_primary"
+                android:textSize="15sp"/>
+
+            <Switch
+                android:id="@+id/castAudioSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"/>
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="Where the other device shows it"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp"/>
+
+        <RadioGroup
+            android:id="@+id/castPlacementGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"/>
+    </LinearLayout>
+</LinearLayout>

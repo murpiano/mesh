@@ -16,8 +16,11 @@
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/AppTheme"
         android:allowBackup="false">
+        <!-- configChanges: a running cast must survive a rotation. The encoder is rebuilt
+             around the new dimensions in MainActivity.onConfigurationChanged instead. -->
         <activity
             android:name=".ui.MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>

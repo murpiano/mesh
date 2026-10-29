@@ -4,9 +4,14 @@ import android.Manifest
 import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.util.DisplayMetrics
 import android.widget.Toast
 import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -209,6 +214,7 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
 
     override fun onDestroy() {
         super.onDestroy()
+        stopCast("The phone closed Mesh.")
         listener?.close() // unblocks accept(); the loop exits
         discovery.stop()
         meshSession?.let(::closeInBackground)
@@ -549,6 +555,7 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
      */
     internal fun disconnectMeshSession() {
         val session = meshSession ?: return
+        stopCast("The connection to the device ended.")
         userDisconnected = true
         meshSession = null
         meshReconnectTarget = null
@@ -571,6 +578,7 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
      * until the user reconnects, same as our own disconnectMeshSession(). */
     private fun onPeerGoodbye(session: MeshSession) {
         if (session !== meshSession) return // a replaced/closed session
+        stopCast("The connection to the device ended.", notifyPeer = false)
         userDisconnected = true
         meshSession = null
         meshReconnectTarget = null
@@ -652,6 +660,11 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
             MeshSessionState.DISCONNECTED -> "Disconnected from $name"
         })
         rebuildDeviceRows()
+        if (state != MeshSessionState.CONNECTED) {
+            // A cast rides on the control plane for its settings and its stop; without it there
+            // is nothing to steer the cast with.
+            stopCast("The connection to the device ended.", notifyPeer = false)
+        }
         if (state == MeshSessionState.DISCONNECTED) ensureMeshReconnect(session)
     }
 
@@ -914,6 +927,245 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
         getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("mesh", text))
     }
 
+    // Casting -------------------------------------------------------------------------------
+
+    // One cast at a time, always ours to the connected peer: the phone is the sender, the PC
+    // the receiver. Everything below is torn down together by stopCast().
+    private var castId: String? = null
+    private var castPeerUuid: String? = null
+    private var castConsent: Intent? = null
+    private var castReady: CastReady? = null
+    private var castProjection: MediaProjection? = null
+    private var castChannel: CastChannel? = null
+    private var caster: ScreenCaster? = null
+
+    /** The settings both devices last agreed on, or null while no cast runs. The controls on the
+     * device page render from this. */
+    internal var castSettings: CastSettings? = null
+        private set
+
+    private val castConsentLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val data = result.data
+            if (result.resultCode != RESULT_OK || data == null) {
+                stopCast("The phone did not allow sharing its screen.")
+                return@registerForActivityResult
+            }
+            castConsent = data
+            beginCastIfReady()
+        }
+
+    // The playback-capture API counts as recording, so the sound needs this. A refusal only
+    // costs the audio: the picture keeps going.
+    private val castAudioPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) caster?.setAudioEnabled(true)
+            else {
+                Toast.makeText(this, "Mesh may not capture this phone's sound", Toast.LENGTH_LONG).show()
+                castSettings?.let { applyCastSettings(it.copy(audio = false), fromPeer = false) }
+            }
+        }
+
+    /** True when the peer announced in its mDNS record that it understands casting. An older
+     * build would close the connection on the cast messages, so it is never offered. */
+    internal fun peerSupportsCast(uuid: String): Boolean =
+        deviceRows.firstOrNull { it.uuid == uuid }?.supportsCast == true
+
+    /** True while our cast to [uuid] runs. */
+    internal fun isCasting(uuid: String): Boolean = castPeerUuid == uuid && castId != null
+
+    /**
+     * Starts a cast of this phone's screen to the connected peer: tells it we want to cast,
+     * asks the user for the system's capture consent, and waits for both answers before the
+     * encoder and the media plane come up (see [beginCastIfReady]).
+     */
+    internal fun startCast(peerUuid: String) {
+        if (castId != null) return
+        val session = meshSession?.takeIf { meshPeerUuid == peerUuid } ?: return
+        if (!peerSupportsCast(peerUuid)) return
+
+        val id = UUID.randomUUID().toString()
+        castId = id
+        castPeerUuid = peerUuid
+        castConsent = null
+        castReady = null
+        refreshCastControls()
+
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) { runCatching { session.send(CastStart(id)) } }
+        }
+
+        val manager = getSystemService(MediaProjectionManager::class.java)
+        castConsentLauncher.launch(manager.createScreenCaptureIntent())
+    }
+
+    /** Stops our cast, tells the peer why, and releases the encoder, the media plane and the
+     * foreground service. Safe to call when no cast runs. */
+    internal fun stopCast(reason: String = "The phone stopped the cast.", notifyPeer: Boolean = true) {
+        val id = castId ?: return
+        val session = meshSession?.takeIf { meshPeerUuid == castPeerUuid }
+
+        castId = null
+        castPeerUuid = null
+        castConsent = null
+        castReady = null
+        castSettings = null
+
+        caster?.stop()
+        caster = null
+        castProjection = null // ScreenCaster.stop() already released it
+        runCatching { castChannel?.close() }
+        castChannel = null
+        CastService.stop(this)
+        refreshCastControls()
+
+        if (notifyPeer && session != null) lifecycleScope.launch {
+            withContext(Dispatchers.IO) { runCatching { session.send(CastStop(id, reason)) } }
+        }
+    }
+
+    /**
+     * A control on this phone moved: apply the whole record here and send it to the peer. The
+     * record is replicated whole on every change from whichever side made it, so there is
+     * nothing to merge.
+     */
+    internal fun updateCastSettings(settings: CastSettings) = applyCastSettings(settings, fromPeer = false)
+
+    private fun applyCastSettings(settings: CastSettings, fromPeer: Boolean) {
+        val id = castId ?: return
+        val previous = castSettings
+        castSettings = settings
+
+        if (previous?.quality != settings.quality) {
+            val metrics = screenMetrics()
+            caster?.applyProfile(CastQuality.profileFor(settings.quality, metrics.widthPixels, metrics.heightPixels))
+        }
+        if (previous?.audio != settings.audio) applyCastAudio(settings.audio)
+
+        refreshCastControls()
+
+        if (!fromPeer) {
+            val session = meshSession?.takeIf { meshPeerUuid == castPeerUuid } ?: return
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) { runCatching { session.send(CastSettingsUpdate(id, settings)) } }
+            }
+        }
+    }
+
+    private fun applyCastAudio(enabled: Boolean) {
+        if (!enabled) {
+            caster?.setAudioEnabled(false)
+            return
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            caster?.setAudioEnabled(true)
+        } else {
+            castAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    /** Both halves are in: the peer's media listener and the user's consent. Brings up the
+     * foreground service (Android 14 and newer refuse a projection without one), the media
+     * plane and the encoder. */
+    private fun beginCastIfReady() {
+        val id = castId ?: return
+        val ready = castReady?.takeIf { it.castId == id } ?: return
+        val consent = castConsent ?: return
+        val identityPair = identity ?: return
+        val peerUuid = castPeerUuid ?: return
+        if (caster != null) return
+
+        CastService.start(this, peerDisplayName())
+
+        lifecycleScope.launch {
+            val projection = try {
+                getSystemService(MediaProjectionManager::class.java)
+                    .getMediaProjection(RESULT_OK, consent)
+            } catch (e: Exception) {
+                stopCast("The phone could not start sharing its screen: ${e.message}")
+                return@launch
+            }
+            if (projection == null) {
+                stopCast("The phone could not start sharing its screen.")
+                return@launch
+            }
+            castProjection = projection
+
+            val endpoint = resolvePeerEndpoint(peerUuid, meshPeerEndpoint)
+            val channel = try {
+                CastChannel.connect(identityPair, endpoint.first, ready.port, ready.token)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                runCatching { projection.stop() }
+                stopCast("The cast could not reach the other device: ${e.message}")
+                return@launch
+            }
+            if (castId != id) { // stopped while the channel was coming up
+                runCatching { channel.close() }
+                runCatching { projection.stop() }
+                return@launch
+            }
+            castChannel = channel
+
+            val metrics = screenMetrics()
+            val settings = castSettings ?: CastSettings(
+                quality = 50, audio = false,
+                placement = CastPlacement(CastPlacementMode.WINDOW, "", 0, 0, 0, 0),
+                monitors = emptyList())
+            castSettings = settings
+
+            val screenCaster = ScreenCaster(projection, channel, lifecycleScope, metrics.densityDpi)
+            screenCaster.onEnded = { reason ->
+                runOnUiThread { stopCast(reason) }
+            }
+            caster = screenCaster
+            screenCaster.start(CastQuality.profileFor(settings.quality, metrics.widthPixels, metrics.heightPixels))
+            if (settings.audio) applyCastAudio(true)
+            refreshCastControls()
+        }
+    }
+
+    /** The whole screen is what a cast carries, so a rotation changes the encoder's dimensions.
+     * The activity keeps running through it (see configChanges in the manifest). */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val quality = castSettings?.quality ?: return
+        val metrics = screenMetrics()
+        caster?.applyScreenSize(quality, metrics.widthPixels, metrics.heightPixels)
+    }
+
+    @Suppress("DEPRECATION") // getRealMetrics is the one call that works from API 26 up
+    private fun screenMetrics(): DisplayMetrics {
+        val metrics = DisplayMetrics()
+        windowManager.defaultDisplay.getRealMetrics(metrics)
+        return metrics
+    }
+
+    private fun refreshCastControls() {
+        deviceFragment()?.refreshCastSection()
+    }
+
+    private fun onCastReadyReceived(message: CastReady) {
+        if (message.castId != castId) return
+        castReady = message
+        beginCastIfReady()
+    }
+
+    private fun onCastSettingsReceived(message: CastSettingsUpdate) {
+        if (message.castId != castId) return
+        applyCastSettings(message.settings, fromPeer = true)
+    }
+
+    private fun onCastStopReceived(message: CastStop) {
+        if (message.castId != castId) return
+        val reason = message.reason
+        stopCast(reason, notifyPeer = false)
+        if (reason.isNotEmpty()) setStatus(reason)
+    }
+
     private fun onMeshMessageReceived(message: MeshMessage, peerUuid: String, peerName: String, session: MeshSession) {
         // Called on MeshSession's read loop (IO thread); lifecycleScope.launch marshals to Main.
         when (message) {
@@ -922,6 +1174,9 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
             is ChatHistorySync -> lifecycleScope.launch(Dispatchers.Main) { onChatHistorySyncReceived(message, peerUuid) }
             is ChatEdit -> lifecycleScope.launch(Dispatchers.Main) { onChatEditReceived(message, peerUuid) }
             is ChatDelete -> lifecycleScope.launch(Dispatchers.Main) { onChatDeleteReceived(message, peerUuid) }
+            is CastReady -> lifecycleScope.launch(Dispatchers.Main) { onCastReadyReceived(message) }
+            is CastSettingsUpdate -> lifecycleScope.launch(Dispatchers.Main) { onCastSettingsReceived(message) }
+            is CastStop -> lifecycleScope.launch(Dispatchers.Main) { onCastStopReceived(message) }
             else -> {}
         }
     }
