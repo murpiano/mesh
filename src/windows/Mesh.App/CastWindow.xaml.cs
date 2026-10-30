@@ -65,6 +65,11 @@ public partial class CastWindow : Window
         switch (applied.Mode)
         {
             case CastPlacementMode.Fullscreen:
+                // WPF ignores a Left/Top move while already Maximized, and Maximized->Maximized
+                // is a no-op transition: switching monitors while fullscreen would otherwise
+                // leave the window on the old one. Drop to Normal first so the move takes, then
+                // maximize onto the new bounds.
+                WindowState = WindowState.Normal;
                 MoveToPhysical(CastMonitors.BoundsOf(applied.MonitorId));
                 WindowStyle = WindowStyle.None;
                 WindowState = WindowState.Maximized;

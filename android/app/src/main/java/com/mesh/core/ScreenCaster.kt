@@ -12,6 +12,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -73,13 +75,13 @@ class ScreenCaster(
             }
             return
         }
-        restart(next)
+        scope.launch { restart(next) }
     }
 
     /** The screen rotated or otherwise changed size: the encoder has to be rebuilt around the
      * new dimensions, exactly as a resolution change from the quality scale is. */
     fun applyScreenSize(quality: Int, screenWidth: Int, screenHeight: Int) {
-        restart(CastQuality.profileFor(quality, screenWidth, screenHeight))
+        scope.launch { restart(CastQuality.profileFor(quality, screenWidth, screenHeight)) }
     }
 
     /** Switches the phone's sound on or off while the cast runs. Only apps that allow being
@@ -98,12 +100,20 @@ class ScreenCaster(
     fun stop() {
         stopped = true
         audio.stop()
-        releaseEncoder()
+        // Cancel the pump and let its finally block release the codec; don't wait here since
+        // stop() may be called from the main thread and blocking for up to 100 ms is undesirable.
+        pump?.cancel()
+        pump = null
+        runCatching { virtualDisplay?.release() }
+        virtualDisplay = null
+        codec = null  // pumpFrames holds its own local reference and releases it in finally
+        runCatching { inputSurface?.release() }
+        inputSurface = null
         runCatching { projection.unregisterCallback(projectionCallback) }
         runCatching { projection.stop() }
     }
 
-    private fun restart(next: CastProfile) {
+    private suspend fun restart(next: CastProfile) {
         releaseEncoder()
         if (!stopped) startEncoder(next)
     }
@@ -135,18 +145,22 @@ class ScreenCaster(
                 null)
             pump = scope.launch(Dispatchers.IO) { pumpFrames(encoder) }
         } catch (e: Exception) {
-            releaseEncoder()
+            // pump was never started, so clean up the partial encoder directly
+            runCatching { virtualDisplay?.release() }; virtualDisplay = null
+            runCatching { codec?.stop() }; runCatching { codec?.release() }; codec = null
+            runCatching { inputSurface?.release() }; inputSurface = null
             end("The phone could not start encoding: ${e.message ?: e.javaClass.simpleName}")
         }
     }
 
     private suspend fun pumpFrames(encoder: MediaCodec) {
         val info = MediaCodec.BufferInfo()
-        while (scope.isActive && !stopped) {
+        try {
+        while (currentCoroutineContext().isActive && !stopped) {
             val index = try {
                 encoder.dequeueOutputBuffer(info, 100_000)
             } catch (e: IllegalStateException) {
-                return // the encoder was released under us by a restart
+                return
             }
             if (index < 0) continue
             val buffer = encoder.getOutputBuffer(index)
@@ -173,25 +187,37 @@ class ScreenCaster(
                 return
             }
         }
+        } finally {
+            runCatching { encoder.stop() }
+            runCatching { encoder.release() }
+        }
     }
 
-    private fun releaseEncoder() {
-        pump?.cancel()
+    // Suspend so callers on the restart path can cancelAndJoin the pump before starting a new
+    // encoder. The codec itself is released inside pumpFrames' finally block — this function
+    // just waits for that to finish, then nulls the field.
+    private suspend fun releaseEncoder() {
+        val job = pump
         pump = null
         runCatching { virtualDisplay?.release() }
         virtualDisplay = null
-        runCatching { codec?.stop() }
-        runCatching { codec?.release() }
-        codec = null
         runCatching { inputSurface?.release() }
         inputSurface = null
+        job?.cancelAndJoin()
+        codec = null
     }
 
     private fun end(reason: String) {
         if (stopped) return
         stopped = true
         audio.stop()
-        releaseEncoder()
+        pump?.cancel()
+        pump = null
+        runCatching { virtualDisplay?.release() }
+        virtualDisplay = null
+        codec = null
+        runCatching { inputSurface?.release() }
+        inputSurface = null
         runCatching { projection.unregisterCallback(projectionCallback) }
         runCatching { projection.stop() }
         onEnded?.invoke(reason)
