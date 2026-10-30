@@ -75,6 +75,7 @@ public sealed class CastDecoder : IDisposable
         }
         catch (Exception ex)
         {
+            Mesh.Core.DebugLog.Write($"CastDecoder: decode failed ({ex.GetType().Name}: {ex.Message})\n{ex.StackTrace}");
             Failed?.Invoke(ex.Message);
             Reset();
             return null;
@@ -86,15 +87,41 @@ public sealed class CastDecoder : IDisposable
         while (true)
         {
             var buffers = new OutputDataBuffer[1];
+            // Unless the decoder sets OutputStreamProvidesSamples/CanProvideSamples, ProcessOutput
+            // needs a sample with an already-allocated buffer handed to it — a null Sample fails
+            // with E_INVALIDARG, which is the normal case for the built-in H.264 decoder MFT.
+            var streamInfo = decoder.GetOutputStreamInfo(0);
+            var providesOwnSamples = (streamInfo.Flags &
+                (int)(OutputStreamInfoFlags.OutputStreamProvidesSamples | OutputStreamInfoFlags.OutputStreamCanProvideSamples)) != 0;
+            IMFSample? ownedSample = null;
+            if (!providesOwnSamples)
+            {
+                var buffer = streamInfo.Alignment > 0
+                    ? MediaFactory.MFCreateAlignedMemoryBuffer(streamInfo.Size, streamInfo.Alignment - 1)
+                    : MediaFactory.MFCreateMemoryBuffer(streamInfo.Size);
+                ownedSample = MediaFactory.MFCreateSample();
+                ownedSample.AddBuffer(buffer);
+                buffers[0].Sample = ownedSample;
+            }
+
             var result = decoder.ProcessOutput(ProcessOutputFlags.None, 1, ref buffers[0], out _);
 
-            if (result.Code == NeedMoreInput) return null;
+            if (result.Code == NeedMoreInput)
+            {
+                ownedSample?.Dispose();
+                return null;
+            }
             if (result.Code == StreamChange)
             {
+                ownedSample?.Dispose();
                 SelectOutputType(decoder);
                 continue;
             }
-            result.CheckError();
+            if (!result.Success)
+            {
+                ownedSample?.Dispose();
+                result.CheckError();
+            }
 
             var sample = buffers[0].Sample;
             if (sample == null) return null;
@@ -126,10 +153,15 @@ public sealed class CastDecoder : IDisposable
         var input = MediaFactory.MFCreateMediaType();
         input.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
         input.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264);
+        // The built-in H.264 decoder MFT refuses an input type with no frame size at all
+        // (E_INVALIDARG); the real size arrives once the bitstream's SPS is parsed, so a
+        // placeholder here is only ever used for this one negotiation step.
+        input.Set(MediaTypeAttributeKeys.FrameSize, ((ulong)1920 << 32) | 1080);
         decoder.SetInputType(0, input, 0);
 
         SelectOutputType(decoder);
         decoder.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero);
+        decoder.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero);
         return decoder;
     }
 

@@ -1003,6 +1003,7 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
      * foreground service. Safe to call when no cast runs. */
     internal fun stopCast(reason: String = "The phone stopped the cast.", notifyPeer: Boolean = true) {
         val id = castId ?: return
+        DebugLog.write("stopCast: id=$id reason=$reason")
         val session = meshSession?.takeIf { meshPeerUuid == castPeerUuid }
 
         castId = null
@@ -1077,8 +1078,22 @@ class MainActivity : AppCompatActivity(), PairingPrompt {
         val peerUuid = castPeerUuid ?: return
         if (caster != null) return
 
-        CastService.start(this, peerDisplayName())
+        // The projection may only be taken once this service is really in the foreground — see
+        // CastService. Taking it earlier throws, and tearing the service down to recover from
+        // that throw is what killed the app.
+        CastService.start(this, peerDisplayName()) { failure ->
+            if (failure != null) stopCast(failure)
+            else if (castId == id) runCastPipeline(id, ready, consent, identityPair, peerUuid)
+        }
+    }
 
+    private fun runCastPipeline(
+        id: String,
+        ready: CastReady,
+        consent: Intent,
+        identityPair: Pair<X509Certificate, PrivateKey>,
+        peerUuid: String
+    ) {
         lifecycleScope.launch {
             val projection = try {
                 getSystemService(MediaProjectionManager::class.java)
